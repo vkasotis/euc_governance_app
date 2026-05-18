@@ -103,6 +103,14 @@ TIMELINESS_CONTROL_KEYS = [
     "8. Resilience",
 ]
 
+# The workbook allows N/A only for EUC Library of Controls / CACRT and Evidence & sign-off.
+NA_ALLOWED_CONTROL_KEYS = {
+    "5. EUC Library of Controls (CACRT)",
+    "7. Evidence & sign-off",
+}
+
+OWNER_INHERENT_LEVELS = ["Low", "Medium", "High"]
+
 
 def username_options_for_role(role: str) -> list[str]:
     return ROLE_USERNAMES.get(role, ["Demo.User"])
@@ -118,6 +126,16 @@ def can_view_all(role: str) -> bool:
 
 def can_configure(role: str) -> bool:
     return role == ADMIN_ROLE
+
+
+def can_delete_records(role: str) -> bool:
+    """Governed hard-delete authority for MVP records.
+
+    Deletes are restricted to GCC and Group IT Governance Administrator and
+    always create an immutable audit-trail DELETE event before the row is
+    removed. This keeps demo data manageable while preserving accountability.
+    """
+    return role in {GCC_ROLE, ADMIN_ROLE}
 
 
 def can_review(role: str) -> bool:
@@ -214,16 +232,37 @@ def required_action_guidance(residual_risk: str) -> str:
 
 
 def calculate_policy_risk(payload: dict[str, Any]) -> dict[str, Any]:
-    """Calculate EUC risk using the uploaded Risk Assessment workbook methodology."""
+    """Calculate EUC risk using the uploaded Risk Assessment workbook methodology.
+
+    The workbook keeps the owner-entered inherent risk separate from the
+    calculated effective inherent risk. Owner levels are Low/Medium/High only.
+    If any BCBS 239 materiality question is Yes, both effective inherent-risk
+    dimensions are forced to Very High while the original owner selections are
+    retained for auditability.
+    """
     q1 = payload.get("materiality_q1", "No")
     q2 = payload.get("materiality_q2", "No")
     q3 = payload.get("materiality_q3", "No")
-    material = payload.get("materially_supports_bcbs239") or material_supports_bcbs239(q1, q2, q3)
+    # Excel B10 = IF(COUNTIF(B7:B9,"Yes")>0,"Yes","No").
+    # The three materiality questions are the source of truth.
+    material = material_supports_bcbs239(q1, q2, q3)
 
     owner_integrity = payload.get("owner_integrity_level") or score_to_risk_level(payload.get("integrity_accuracy_score"))
     owner_timeliness = payload.get("owner_timeliness_level") or score_to_risk_level(payload.get("timeliness_availability_score"))
-    effective_integrity = "Very High" if material == "Yes" else owner_integrity
-    effective_timeliness = "Very High" if material == "Yes" else owner_timeliness
+    # Owner dropdown in the workbook excludes Very High. Normalize legacy values.
+    if owner_integrity == "Very High":
+        owner_integrity = "High"
+    if owner_timeliness == "Very High":
+        owner_timeliness = "High"
+
+    # Workbook rule: if material = Yes, C22/C23 become Very High; B22/B23 remain
+    # the owner's Low/Medium/High selections.
+    if material == "Yes":
+        effective_integrity = "Very High"
+        effective_timeliness = "Very High"
+    else:
+        effective_integrity = owner_integrity
+        effective_timeliness = owner_timeliness
 
     controls = payload.get("controls") or {}
     if not isinstance(controls, dict):
@@ -235,6 +274,10 @@ def calculate_policy_risk(payload: dict[str, Any]) -> dict[str, Any]:
     }
     for control in BASELINE_CONTROL_AREAS:
         control_statuses[control] = control_statuses.get(control) or payload.get(f"control_{BASELINE_CONTROL_AREAS.index(control) + 1}_status") or "In place and evidenced"
+        if control_statuses[control] == "N/A" and control not in NA_ALLOWED_CONTROL_KEYS:
+            # Defensive normalization for non-UI/API payloads. The Streamlit UI
+            # does not offer N/A for these controls.
+            control_statuses[control] = "Not in place"
 
     integrity_ce = derive_control_effectiveness([control_statuses[c] for c in INTEGRITY_CONTROL_KEYS])
     timeliness_ce = derive_control_effectiveness([control_statuses[c] for c in TIMELINESS_CONTROL_KEYS])
@@ -553,7 +596,19 @@ def create_component(payload: dict[str, Any], username: str) -> int:
     return component_id
 
 def get_risk_assessments(euc_id: int) -> pd.DataFrame:
-    return dataframe("SELECT * FROM risk_assessments WHERE euc_id = ? ORDER BY version DESC", (euc_id,))
+    return dataframe("SELECT * FROM risk_assessments WHERE euc_id = ? ORDER BY version DESC, assessment_id DESC", (euc_id,))
+
+
+def get_risk_assessment(assessment_id: int) -> dict[str, Any] | None:
+    return fetch_one(
+        """
+        SELECT ra.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit
+        FROM risk_assessments ra
+        JOIN eucs e ON e.euc_id = ra.euc_id
+        WHERE ra.assessment_id = ?
+        """,
+        (assessment_id,),
+    )
 
 
 def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
@@ -574,6 +629,8 @@ def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
         else:
             status = value or calculation["control_statuses"].get(control)
             rationale = None
+        if status == "N/A" and control not in NA_ALLOWED_CONTROL_KEYS:
+            raise ValueError(f"N/A is not permitted for control: {control}")
         control_rows.append(
             {
                 "control_area": control,
@@ -654,6 +711,133 @@ def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
     insert_audit("Risk Assessment", assessment_id, "CREATE", username, None, {**payload, **calculation})
     evaluate_and_update_completeness(payload["euc_id"], username, create_missing_tasks=True)
     return assessment_id
+
+
+DELETE_ENTITY_CONFIG = {
+    "EUC": {"table": "eucs", "pk": "euc_id", "euc_fk": "euc_id"},
+    "EUC Asset": {"table": "components", "pk": "component_id", "euc_fk": "euc_id"},
+    "Risk Assessment": {"table": "risk_assessments", "pk": "assessment_id", "euc_fk": "euc_id"},
+    "Document": {"table": "documents", "pk": "document_id", "euc_fk": "euc_id"},
+    "Task": {"table": "tasks", "pk": "task_id", "euc_fk": "euc_id"},
+    "Finding": {"table": "findings", "pk": "finding_id", "euc_fk": "euc_id"},
+    "Review": {"table": "reviews", "pk": "review_id", "euc_fk": "euc_id"},
+    "Exception": {"table": "exceptions", "pk": "exception_id", "euc_fk": "euc_id"},
+    "Incident": {"table": "incidents", "pk": "incident_id", "euc_fk": "euc_id"},
+    "Material Change": {"table": "material_changes", "pk": "change_id", "euc_fk": "euc_id"},
+    "Required Artifact Rule": {"table": "required_artifact_rules", "pk": "rule_id", "euc_fk": None},
+    "Reference Data": {"table": "reference_data", "pk": "ref_id", "euc_fk": None},
+    "Due-date Rule": {"table": "due_date_rules", "pk": "rule_id", "euc_fk": None},
+}
+
+
+def _delete_document_file(old: dict[str, Any]) -> None:
+    file_path = old.get("file_path") if old else None
+    if not file_path:
+        return
+    try:
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent / path
+        if path.exists() and path.is_file():
+            path.unlink()
+    except OSError:
+        # Deletion of the DB record must not fail because a local demo file is
+        # already missing or locked. The row snapshot remains in the audit trail.
+        pass
+
+
+def _refresh_euc_after_assessment_delete(euc_id: int, username: str) -> None:
+    latest = fetch_one(
+        """
+        SELECT inherent_risk, residual_risk, materially_supports_bcbs239, assessment_date
+        FROM risk_assessments
+        WHERE euc_id = ?
+        ORDER BY version DESC, assessment_id DESC
+        LIMIT 1
+        """,
+        (euc_id,),
+    )
+    if latest:
+        execute(
+            """
+            UPDATE eucs
+            SET inherent_risk = ?, residual_risk = ?, materially_supports_bcbs239 = ?, last_risk_assessment = ?, updated_at = ?
+            WHERE euc_id = ?
+            """,
+            (
+                latest.get("inherent_risk"),
+                latest.get("residual_risk"),
+                latest.get("materially_supports_bcbs239"),
+                latest.get("assessment_date"),
+                utc_now(),
+                euc_id,
+            ),
+        )
+    else:
+        execute(
+            """
+            UPDATE eucs
+            SET inherent_risk = 'Medium', residual_risk = 'Medium', materially_supports_bcbs239 = 'No',
+                last_risk_assessment = NULL, documentation_completeness_status = 'Incomplete', updated_at = ?
+            WHERE euc_id = ?
+            """,
+            (utc_now(), euc_id),
+        )
+    evaluate_and_update_completeness(euc_id, username, create_missing_tasks=False)
+
+
+def delete_record(entity_type: str, entity_id: int | str, username: str, role: str) -> None:
+    """Delete one MVP record with audit trail. Restricted to GCC and IT Governance Admin."""
+    if not can_delete_records(role):
+        raise PermissionError("Only GCC and Group IT Governance Administrator can delete records.")
+    if entity_type not in DELETE_ENTITY_CONFIG:
+        raise ValueError(f"Unsupported delete entity type: {entity_type}")
+    cfg = DELETE_ENTITY_CONFIG[entity_type]
+    table = cfg["table"]
+    pk = cfg["pk"]
+    old = fetch_one(f"SELECT * FROM {table} WHERE {pk} = ?", (entity_id,))
+    if not old:
+        raise ValueError(f"{entity_type} {entity_id} was not found.")
+    euc_id = old.get(cfg.get("euc_fk")) if cfg.get("euc_fk") else None
+
+    if entity_type == "EUC":
+        # Child rows are deleted explicitly because the MVP schema uses normal
+        # foreign keys rather than ON DELETE CASCADE. Audit the EUC snapshot as
+        # the governed deletion record, and keep audit_trail immutable.
+        for doc in fetch_all("SELECT * FROM documents WHERE euc_id = ?", (entity_id,)):
+            _delete_document_file(doc)
+        for child_table in [
+            "components",
+            "risk_assessments",
+            "tasks",
+            "findings",
+            "reviews",
+            "exceptions",
+            "incidents",
+            "material_changes",
+            "documents",
+        ]:
+            execute(f"DELETE FROM {child_table} WHERE euc_id = ?", (entity_id,))
+        execute("DELETE FROM eucs WHERE euc_id = ?", (entity_id,))
+        insert_audit(entity_type, entity_id, "DELETE", username, old, None)
+        return
+
+    if entity_type == "Document":
+        _delete_document_file(old)
+        execute("UPDATE tasks SET closure_evidence_document_id = NULL WHERE closure_evidence_document_id = ?", (entity_id,))
+        execute("UPDATE exceptions SET closure_evidence_document_id = NULL WHERE closure_evidence_document_id = ?", (entity_id,))
+
+    if entity_type == "Review":
+        execute("UPDATE findings SET review_id = NULL WHERE review_id = ?", (entity_id,))
+
+    execute(f"DELETE FROM {table} WHERE {pk} = ?", (entity_id,))
+    insert_audit(entity_type, entity_id, "DELETE", username, old, None)
+
+    if entity_type == "Risk Assessment" and euc_id:
+        _refresh_euc_after_assessment_delete(int(euc_id), username)
+    elif entity_type == "Document" and euc_id:
+        evaluate_and_update_completeness(int(euc_id), username, create_missing_tasks=False)
+
 
 def safe_filename(filename: str) -> str:
     stem = Path(filename).stem[:80]
@@ -803,23 +987,49 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
     required = required_documents_for_euc(euc_id)
     docs = get_documents(euc_id)
     rows: list[dict[str, Any]] = []
+    latest_assessment = fetch_one(
+        """
+        SELECT assessment_id, version, assessment_date, assessed_by, inherent_risk, residual_risk
+        FROM risk_assessments
+        WHERE euc_id = ?
+        ORDER BY version DESC, assessment_id DESC
+        LIMIT 1
+        """,
+        (euc_id,),
+    )
     for _, req in required.iterrows():
         doc_type = req["required_document_type"]
-        matching = docs[docs["document_type"] == doc_type] if not docs.empty else pd.DataFrame()
-        if matching.empty:
-            status = "Missing"
-            document_id = None
-            reviewed_by = None
-            comments = None
+        if doc_type == "Risk Assessment":
+            if latest_assessment:
+                status = "Accepted"
+                document_id = None
+                reviewed_by = latest_assessment.get("assessed_by")
+                comments = (
+                    f"Satisfied by Risk Assessment #{latest_assessment['assessment_id']} "
+                    f"v{latest_assessment['version']} dated {latest_assessment['assessment_date']} "
+                    f"({latest_assessment['inherent_risk']} inherent / {latest_assessment['residual_risk']} residual)."
+                )
+            else:
+                status = "Missing"
+                document_id = None
+                reviewed_by = None
+                comments = "No risk assessment exists for this EUC. Complete the Risk Assessment page; do not upload a risk assessment document."
         else:
-            status_priority = {"Accepted": 1, "Submitted": 2, "Rejected": 3, "Expired": 4, "Pending": 5, "Missing": 6, "Superseded": 7}
-            matching = matching.copy()
-            matching["_rank"] = matching["status"].map(status_priority).fillna(99)
-            best = matching.sort_values(["_rank", "uploaded_at"]).iloc[0]
-            status = best["status"]
-            document_id = int(best["document_id"])
-            reviewed_by = best.get("reviewed_by")
-            comments = best.get("comments")
+            matching = docs[docs["document_type"] == doc_type] if not docs.empty else pd.DataFrame()
+            if matching.empty:
+                status = "Missing"
+                document_id = None
+                reviewed_by = None
+                comments = None
+            else:
+                status_priority = {"Accepted": 1, "Submitted": 2, "Rejected": 3, "Expired": 4, "Pending": 5, "Missing": 6, "Superseded": 7}
+                matching = matching.copy()
+                matching["_rank"] = matching["status"].map(status_priority).fillna(99)
+                best = matching.sort_values(["_rank", "uploaded_at"]).iloc[0]
+                status = best["status"]
+                document_id = int(best["document_id"])
+                reviewed_by = best.get("reviewed_by")
+                comments = best.get("comments")
         rows.append(
             {
                 "document_type": doc_type,
@@ -833,7 +1043,6 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
-
 
 def evaluate_and_update_completeness(euc_id: int, username: str, create_missing_tasks: bool = False) -> str:
     checklist = artifact_checklist(euc_id)
@@ -852,23 +1061,32 @@ def evaluate_and_update_completeness(euc_id: int, username: str, create_missing_
     if create_missing_tasks and not checklist.empty:
         euc = get_euc(euc_id)
         for _, row in checklist[checklist["status"].isin(["Missing", "Rejected", "Expired"])].iterrows():
-            title = f"Provide mandatory {row['document_type']}"
+            if row["document_type"] == "Risk Assessment":
+                task_type = "Risk assessment"
+                title = "Complete mandatory Risk Assessment"
+                description = "Generated by required artifact checklist. Complete the Risk Assessment page; do not upload a risk assessment document."
+                due_days = DEFAULT_DUE_DAYS["Risk assessment"]
+            else:
+                task_type = "Missing evidence"
+                title = f"Provide mandatory {row['document_type']}"
+                description = "Generated by required artifact checklist. Override requires an approved exception."
+                due_days = DEFAULT_DUE_DAYS["Missing evidence"]
             existing = fetch_one(
                 """
                 SELECT task_id FROM tasks
-                WHERE euc_id = ? AND task_type = 'Missing evidence' AND title = ? AND status IN ('Open','In Progress','Blocked')
+                WHERE euc_id = ? AND task_type = ? AND title = ? AND status IN ('Open','In Progress','Blocked')
                 """,
-                (euc_id, title),
+                (euc_id, task_type, title),
             )
             if not existing:
                 create_task(
                     euc_id=euc_id,
-                    task_type="Missing evidence",
+                    task_type=task_type,
                     title=title,
-                    description="Generated by required artifact checklist. Override requires an approved exception.",
+                    description=description,
                     assigned_to=euc.get("owner") if euc else None,
                     assigned_role=OWNER_ROLE,
-                    due_date=add_days(DEFAULT_DUE_DAYS["Missing evidence"]),
+                    due_date=add_days(due_days),
                     priority="High" if euc and euc.get("residual_risk") in {"High", "Very High"} else "Medium",
                     username=username,
                 )
@@ -1400,6 +1618,12 @@ def upsert_required_rule(payload: dict[str, Any], username: str) -> int:
 
 def required_rules_table() -> pd.DataFrame:
     return dataframe("SELECT * FROM required_artifact_rules ORDER BY risk_level, required_document_type")
+
+
+def reference_data_table(category: str | None = None) -> pd.DataFrame:
+    if category:
+        return dataframe("SELECT * FROM reference_data WHERE category = ? ORDER BY category, value", (category,))
+    return dataframe("SELECT * FROM reference_data ORDER BY category, value")
 
 
 def due_date_rules_table() -> pd.DataFrame:

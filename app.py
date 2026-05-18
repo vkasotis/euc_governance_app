@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
+import json
 
 import pandas as pd
 import plotly.express as px
@@ -127,6 +129,131 @@ def csv_download(df: pd.DataFrame, file_name: str, label: str = "Download CSV") 
         st.download_button(label, df.to_csv(index=False).encode("utf-8"), file_name=file_name, mime="text/csv")
 
 
+def _first_query_param(name: str) -> str | None:
+    try:
+        value = st.query_params.get(name)
+    except Exception:
+        return None
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
+
+
+def apply_query_params() -> None:
+    """Allow internal evidence-pack links to open an EUC/assessment review."""
+    euc_id = _first_query_param("euc_id")
+    assessment_id = _first_query_param("assessment_id")
+    page = _first_query_param("page")
+    if euc_id and str(euc_id).isdigit():
+        st.session_state["selected_euc_id"] = int(euc_id)
+    if assessment_id and str(assessment_id).isdigit():
+        st.session_state["selected_assessment_id"] = int(assessment_id)
+    if page in NAVIGATION:
+        st.session_state["nav_page"] = page
+
+
+def assessment_review_url(euc_id: int, assessment_id: int) -> str:
+    return f"?page={quote('Risk Assessment')}&euc_id={int(euc_id)}&assessment_id={int(assessment_id)}"
+
+
+def render_risk_assessment_review(assessment: dict[str, Any] | None) -> None:
+    """Business-friendly presentation of a completed risk assessment."""
+    if not assessment:
+        st.info("No risk assessment selected for review.")
+        return
+    st.markdown(
+        f"**Risk Assessment #{assessment['assessment_id']} · Version {assessment.get('version', '—')}**  \n"
+        f"EUC: **{assessment.get('reference_id', '—')} — {assessment.get('euc_name', '—')}**  \n"
+        f"Assessed by: **{assessment.get('assessed_by', '—')}** · "
+        f"Date: **{assessment.get('assessment_date', '—')}** · "
+        f"Type: **{assessment.get('assessment_type') or assessment.get('trigger_type') or '—'}**"
+    )
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Materially supports BCBS 239", assessment.get("materially_supports_bcbs239") or "No")
+    c2.metric("Overall inherent risk", assessment.get("inherent_risk") or "—")
+    c3.metric("Overall residual risk", assessment.get("residual_risk") or "—")
+
+    st.markdown("**Materiality questions**")
+    mat = pd.DataFrame(
+        [
+            {"Question": BCBS_MATERIALITY_QUESTIONS[0], "Answer": assessment.get("materiality_q1")},
+            {"Question": BCBS_MATERIALITY_QUESTIONS[1], "Answer": assessment.get("materiality_q2")},
+            {"Question": BCBS_MATERIALITY_QUESTIONS[2], "Answer": assessment.get("materiality_q3")},
+        ]
+    )
+    st.dataframe(mat, use_container_width=True, hide_index=True)
+
+    st.markdown("**Dimension calculation**")
+    dim = pd.DataFrame(
+        [
+            {
+                "Dimension": "Integrity / Accuracy",
+                "Owner inherent": assessment.get("owner_integrity_level"),
+                "Effective inherent": assessment.get("effective_integrity_level"),
+                "Control effectiveness": assessment.get("integrity_control_effectiveness"),
+                "Residual risk": assessment.get("integrity_residual_level"),
+                "Rationale": assessment.get("integrity_rationale"),
+            },
+            {
+                "Dimension": "Timeliness / Availability",
+                "Owner inherent": assessment.get("owner_timeliness_level"),
+                "Effective inherent": assessment.get("effective_timeliness_level"),
+                "Control effectiveness": assessment.get("timeliness_control_effectiveness"),
+                "Residual risk": assessment.get("timeliness_residual_level"),
+                "Rationale": assessment.get("timeliness_rationale"),
+            },
+        ]
+    )
+    st.dataframe(dim, use_container_width=True, hide_index=True)
+
+    control_json = assessment.get("control_assessment_json")
+    if control_json:
+        try:
+            controls = pd.DataFrame(json.loads(control_json))
+            st.markdown("**Baseline controls**")
+            st.dataframe(controls, use_container_width=True, hide_index=True)
+        except Exception:
+            st.warning("Control-assessment details could not be parsed for this historical record.")
+    if assessment.get("required_action_guidance"):
+        st.info(assessment["required_action_guidance"])
+    if assessment.get("rationale"):
+        st.caption(f"Overall notes: {assessment['rationale']}")
+
+
+def delete_record_panel(entity_type: str, df: pd.DataFrame, id_col: str, label_cols: list[str] | None = None, key: str | None = None) -> None:
+    """Render a governed delete widget for GCC and IT Governance Administrator.
+
+    The service layer writes a DELETE audit record with the row snapshot before
+    removal. This helper intentionally requires an explicit confirmation tick.
+    """
+    username, role = current_user()
+    if not svc.can_delete_records(role) or df is None or df.empty or id_col not in df.columns:
+        return
+    label_cols = label_cols or []
+    widget_key = key or f"delete_{entity_type}_{id_col}".replace(" ", "_")
+    with st.expander(f"Governed delete — {entity_type}"):
+        st.warning("Available only to GCC and Group IT Governance Administrator. A DELETE event is retained in the audit trail.")
+        options: dict[str, int] = {}
+        for _, row in df.dropna(subset=[id_col]).iterrows():
+            parts = [f"{id_col}={int(row[id_col])}"]
+            for col in label_cols:
+                if col in row and pd.notna(row[col]):
+                    parts.append(str(row[col])[:80])
+            options[" — ".join(parts)] = int(row[id_col])
+        if not options:
+            st.info("No deletable records are visible in this view.")
+            return
+        chosen = st.selectbox("Record to delete", list(options.keys()), key=f"{widget_key}_select")
+        confirmed = st.checkbox("I understand this will delete the selected record from the MVP database.", key=f"{widget_key}_confirm")
+        if st.button(f"Delete selected {entity_type}", key=f"{widget_key}_button", disabled=not confirmed):
+            try:
+                svc.delete_record(entity_type, options[chosen], username, role)
+                st.success(f"Deleted {entity_type} {options[chosen]}. Audit trail retained.")
+                rerun()
+            except Exception as exc:
+                st.error(str(exc))
+
+
 def option_index(options: list[str], value: str | None, default: int = 0) -> int:
     if value in options:
         return options.index(value)
@@ -185,7 +312,10 @@ def show_sidebar() -> str:
     st.sidebar.divider()
     st.sidebar.write(f"**Logged in as:** {username}")
     st.sidebar.write(f"**Role:** {role}")
-    page = st.sidebar.radio("Navigation", NAVIGATION, index=0)
+    default_page = st.session_state.get("nav_page", NAVIGATION[0])
+    if default_page not in NAVIGATION:
+        default_page = NAVIGATION[0]
+    page = st.sidebar.radio("Navigation", NAVIGATION, index=NAVIGATION.index(default_page), key="nav_page")
     st.sidebar.divider()
     st.sidebar.caption(f"SQLite: `{DATABASE_FILE.name}` · Uploads: `/uploads`")
     return page
@@ -253,6 +383,7 @@ def page_inventory() -> None:
     show_cols = [c for c in show_cols if c in filtered.columns]
     safe_df(filtered[show_cols], height=500)
     csv_download(filtered[show_cols], "euc_inventory.csv")
+    delete_record_panel("EUC", filtered, "euc_id", ["reference_id", "name", "owner"], key="inventory_euc")
     if not filtered.empty:
         selected_ref = st.selectbox("Open EUC in detail view", filtered["reference_id"].tolist())
         if st.button("Set selected EUC"):
@@ -431,6 +562,7 @@ def page_detail() -> None:
     c2.markdown(f"**Risk:** {badge(euc['residual_risk'])}")
     c3.markdown(f"**Lifecycle:** {badge(euc['lifecycle_status'])}")
     c4.markdown(f"**Docs:** {badge(euc['documentation_completeness_status'])}")
+    delete_record_panel("EUC", pd.DataFrame([euc]), "euc_id", ["reference_id", "name", "owner"], key="detail_euc")
 
     tabs = st.tabs(["Overview", "EUC Inventory Fields", "Mapping", "EUC Asset Inventory", "Risk History", "Evidence", "Tasks", "Reviews", "Audit"])
     with tabs[0]:
@@ -520,18 +652,27 @@ def page_detail() -> None:
                         except ValueError as exc:
                             st.error(str(exc))
     with tabs[3]:
-        safe_df(svc.get_components(euc["euc_id"]))
+        assets_tab = svc.get_components(euc["euc_id"])
+        safe_df(assets_tab)
+        delete_record_panel("EUC Asset", assets_tab, "component_id", ["component_name", "technology"], key="detail_asset")
     with tabs[4]:
-        safe_df(svc.get_risk_assessments(euc["euc_id"]))
+        risk_tab = svc.get_risk_assessments(euc["euc_id"])
+        safe_df(risk_tab)
+        delete_record_panel("Risk Assessment", risk_tab, "assessment_id", ["version", "assessment_date", "residual_risk"], key="detail_risk")
     with tabs[5]:
-        safe_df(svc.get_documents(euc["euc_id"]))
+        docs_tab = svc.get_documents(euc["euc_id"])
+        safe_df(docs_tab)
+        delete_record_panel("Document", docs_tab, "document_id", ["document_type", "file_name", "status"], key="detail_document")
     with tabs[6]:
         tasks = svc.get_tasks(open_only=False)
         if not tasks.empty:
             tasks = tasks[tasks["euc_id"] == euc["euc_id"]]
         safe_df(tasks)
+        delete_record_panel("Task", tasks, "task_id", ["task_type", "title", "status"], key="detail_task")
     with tabs[7]:
-        safe_df(svc.get_reviews(euc["euc_id"]))
+        reviews_tab = svc.get_reviews(euc["euc_id"])
+        safe_df(reviews_tab)
+        delete_record_panel("Review", reviews_tab, "review_id", ["review_type", "outcome", "reviewer"], key="detail_review")
     with tabs[8]:
         safe_df(svc.audit_trail({"entity_type": "EUC", "entity_id": euc["euc_id"]}), height=350)
 
@@ -549,7 +690,9 @@ def page_components() -> None:
         "execution_frequency", "cde_mappings", "data_outputs", "level_of_automation", "backup_recovery_arrangements",
         "spof_risk", "modification_date", "review_date", "owner",
     ]
-    safe_df(assets[[c for c in preferred_cols if c in assets.columns]] if not assets.empty else assets, height=350)
+    visible_assets = assets[[c for c in preferred_cols if c in assets.columns]] if not assets.empty else assets
+    safe_df(visible_assets, height=350)
+    delete_record_panel("EUC Asset", assets, "component_id", ["component_name", "technology", "owner"], key="components_asset")
     if not svc.can_edit_euc(role, username, euc):
         st.info("You can view assets but cannot add assets for this EUC in the current role.")
         return
@@ -631,7 +774,15 @@ def page_risk_assessment() -> None:
         "timeliness_control_effectiveness", "integrity_residual_level", "timeliness_residual_level",
         "inherent_risk", "residual_risk", "required_action_guidance",
     ]
-    safe_df(assessments[[c for c in display_cols if c in assessments.columns]] if not assessments.empty else assessments, height=280)
+    visible_assessments = assessments[[c for c in display_cols if c in assessments.columns]] if not assessments.empty else assessments
+    safe_df(visible_assessments, height=280)
+    selected_assessment_id = st.session_state.get("selected_assessment_id")
+    if selected_assessment_id:
+        selected_assessment = svc.get_risk_assessment(int(selected_assessment_id))
+        if selected_assessment and int(selected_assessment.get("euc_id", 0)) == int(euc["euc_id"]):
+            with st.expander(f"Assessment review — #{selected_assessment_id}", expanded=True):
+                render_risk_assessment_review(selected_assessment)
+    delete_record_panel("Risk Assessment", assessments, "assessment_id", ["version", "assessment_date", "inherent_risk", "residual_risk"], key="risk_assessment")
     if not svc.can_edit_euc(role, username, euc) and role not in {svc.ADMIN_ROLE, svc.GCC_ROLE}:
         st.warning("Only the EUC owner/delegate or governance roles can record assessments.")
         return
@@ -652,8 +803,28 @@ def page_risk_assessment() -> None:
 
         st.subheader("Inherent risk by dimension")
         c4, c5 = st.columns(2)
-        owner_integrity = c4.selectbox("Owner inherent level — Integrity / Accuracy", RISK_LEVELS, index=option_index(RISK_LEVELS, euc.get("inherent_risk") or "Medium"))
-        owner_timeliness = c5.selectbox("Owner inherent level — Timeliness / Availability", RISK_LEVELS, index=option_index(RISK_LEVELS, euc.get("inherent_risk") or "Medium"))
+        owner_level_options = ["Low", "Medium", "High"]
+        materiality_forces_very_high = any(v == "Yes" for v in [q1, q2, q3])
+        if materiality_forces_very_high:
+            st.warning(
+                "At least one BCBS 239 materiality answer is Yes. Per the workbook, owner input remains Low/Medium/High, "
+                "but both effective inherent-risk dimensions are automatically calculated as Very High."
+            )
+        owner_integrity = c4.selectbox(
+            "Owner inherent level — Integrity / Accuracy",
+            owner_level_options,
+            index=option_index(owner_level_options, euc.get("inherent_risk") if euc.get("inherent_risk") in owner_level_options else "Medium"),
+            help="Workbook input B22. Very High is not manually selectable; it is derived from BCBS 239 materiality.",
+        )
+        owner_timeliness = c5.selectbox(
+            "Owner inherent level — Timeliness / Availability",
+            owner_level_options,
+            index=option_index(owner_level_options, euc.get("inherent_risk") if euc.get("inherent_risk") in owner_level_options else "Medium"),
+            help="Workbook input B23. Very High is not manually selectable; it is derived from BCBS 239 materiality.",
+        )
+        if materiality_forces_very_high:
+            c4.metric("Effective Integrity / Accuracy inherent risk", "Very High")
+            c5.metric("Effective Timeliness / Availability inherent risk", "Very High")
         integrity_rationale = c4.text_area("Integrity / Accuracy rationale")
         timeliness_rationale = c5.text_area("Timeliness / Availability rationale")
 
@@ -672,7 +843,16 @@ def page_risk_assessment() -> None:
         }
         for control in BASELINE_CONTROL_AREAS:
             c_status, c_rationale = st.columns([1, 2])
-            status = c_status.selectbox(control, CONTROL_STATUSES, index=option_index(CONTROL_STATUSES, default_by_control.get(control, "In place and evidenced")), key=f"risk_{euc['euc_id']}_{control}")
+            status_options = CONTROL_STATUSES if control in svc.NA_ALLOWED_CONTROL_KEYS else [s for s in CONTROL_STATUSES if s != "N/A"]
+            default_status = default_by_control.get(control, "In place and evidenced")
+            if default_status not in status_options:
+                default_status = "In place and evidenced"
+            status = c_status.selectbox(
+                control,
+                status_options,
+                index=option_index(status_options, default_status),
+                key=f"risk_{euc['euc_id']}_{control}",
+            )
             rationale = c_rationale.text_input(f"Rationale / evidence notes — {control}", key=f"risk_note_{euc['euc_id']}_{control}")
             controls[control] = {"status": status, "rationale": rationale}
 
@@ -706,8 +886,56 @@ def page_documents() -> None:
     euc = euc_selector()
     if not euc:
         return
+
+    st.subheader("Risk assessment evidence")
+    assessments = svc.get_risk_assessments(euc["euc_id"])
+    if assessments.empty:
+        st.warning("No completed risk assessment exists for this EUC. Complete the Risk Assessment page; do not upload a risk assessment document.")
+    else:
+        st.caption("Completed risk assessments are treated as evidence directly from the Risk Assessment module.")
+        link_rows = []
+        for _, row in assessments.iterrows():
+            review_url = assessment_review_url(int(euc["euc_id"]), int(row["assessment_id"]))
+            st.markdown(
+                f"- [Review Risk Assessment #{int(row['assessment_id'])} v{int(row['version'])}]({review_url}) "
+                f"— {row['assessment_date']} · inherent **{row['inherent_risk']}** · residual **{row['residual_risk']}**"
+            )
+            link_rows.append(
+                {
+                    "assessment_id": int(row["assessment_id"]),
+                    "version": int(row["version"]),
+                    "assessment_date": row.get("assessment_date"),
+                    "assessed_by": row.get("assessed_by"),
+                    "material_bcbs239": row.get("materially_supports_bcbs239"),
+                    "overall_inherent_risk": row.get("inherent_risk"),
+                    "overall_residual_risk": row.get("residual_risk"),
+                    "review_link": review_url,
+                }
+            )
+        st.dataframe(
+            pd.DataFrame(link_rows),
+            use_container_width=True,
+            hide_index=True,
+            column_config={"review_link": st.column_config.LinkColumn("Review link", display_text="Open assessment")},
+        )
+        assessment_options = {
+            f"#{int(row['assessment_id'])} v{int(row['version'])} — {row['assessment_date']} — residual {row['residual_risk']}": int(row["assessment_id"])
+            for _, row in assessments.iterrows()
+        }
+        selected_from_query = st.session_state.get("selected_assessment_id")
+        default_index = 0
+        if selected_from_query in assessment_options.values():
+            default_index = list(assessment_options.values()).index(selected_from_query)
+        selected_label = st.selectbox("Present assessment for review in Evidence Pack", list(assessment_options.keys()), index=default_index)
+        with st.expander("Selected Risk Assessment review", expanded=bool(selected_from_query)):
+            render_risk_assessment_review(svc.get_risk_assessment(assessment_options[selected_label]))
+
+    st.divider()
+    st.subheader("Uploaded document evidence")
     docs = svc.get_documents(euc["euc_id"])
     safe_df(docs, height=320)
+    delete_record_panel("Document", docs, "document_id", ["document_type", "file_name", "status"], key="documents_document")
+    st.caption("Risk Assessment is not uploaded here. The Required Artifact Checklist uses the completed Risk Assessment record for this EUC.")
 
     col_upload, col_review = st.columns(2)
     with col_upload:
@@ -715,7 +943,8 @@ def page_documents() -> None:
         if svc.can_upload_evidence(role, username, euc) and require_write_access():
             uploaded = st.file_uploader("Upload document / evidence")
             with st.form("doc_metadata"):
-                document_type = st.selectbox("Document type", DOCUMENT_TYPES)
+                uploadable_document_types = [doc_type for doc_type in DOCUMENT_TYPES if doc_type != "Risk Assessment"]
+                document_type = st.selectbox("Document type", uploadable_document_types)
                 requirement = st.text_input("Requirement", value=f"Mandatory {document_type}")
                 control_area = st.selectbox("Control area", CONTROL_AREAS)
                 cacrt = st.selectbox("CACRT dimension", CACRT_DIMENSIONS)
@@ -779,6 +1008,7 @@ def page_tasks() -> None:
     open_only = st.toggle("Open tasks only", value=True)
     tasks = svc.get_tasks(role, username, open_only=open_only)
     safe_df(tasks, height=420)
+    delete_record_panel("Task", tasks, "task_id", ["task_type", "title", "status"], key="tasks_task")
     if tasks.empty or svc.is_read_only(role):
         return
     st.subheader("Update task")
@@ -848,6 +1078,7 @@ def page_findings() -> None:
     username, role = current_user()
     findings = svc.get_findings(open_only=False)
     safe_df(findings, height=350)
+    delete_record_panel("Finding", findings, "finding_id", ["reference_id", "severity", "status"], key="findings_finding")
     if svc.is_read_only(role):
         return
     tabs = st.tabs(["Raise finding", "Update finding"])
@@ -895,6 +1126,7 @@ def page_exceptions() -> None:
     username, role = current_user()
     exceptions = svc.get_exceptions(open_only=False)
     safe_df(exceptions, height=340)
+    delete_record_panel("Exception", exceptions, "exception_id", ["reference_id", "approval_status", "status"], key="exceptions_exception")
     if svc.is_read_only(role):
         return
     tabs = st.tabs(["Create exception", "Approve / reject"])
@@ -936,7 +1168,9 @@ def page_exceptions() -> None:
 def page_incidents() -> None:
     st.title("Incidents & Near Misses")
     username, role = current_user()
-    safe_df(svc.get_incidents(open_only=False), height=340)
+    incidents = svc.get_incidents(open_only=False)
+    safe_df(incidents, height=340)
+    delete_record_panel("Incident", incidents, "incident_id", ["reference_id", "incident_date", "status"], key="incidents_incident")
     if svc.is_read_only(role):
         return
     euc = euc_selector("Incident EUC")
@@ -963,7 +1197,9 @@ def page_incidents() -> None:
 def page_material_changes() -> None:
     st.title("Material Changes & Reassessments")
     username, role = current_user()
-    safe_df(svc.get_material_changes(), height=330)
+    changes = svc.get_material_changes()
+    safe_df(changes, height=330)
+    delete_record_panel("Material Change", changes, "change_id", ["reference_id", "change_type", "status"], key="changes_change")
     if svc.is_read_only(role):
         return
     euc = euc_selector("Changed EUC")
@@ -1063,6 +1299,8 @@ def page_admin() -> None:
         category = st.selectbox("Category", ["document_type", "lifecycle_status", "risk_level", "control_area", "cacrt_dimension"])
         st.write("Current values")
         st.write(refs.get(category, []))
+        ref_df = svc.reference_data_table(category)
+        delete_record_panel("Reference Data", ref_df, "ref_id", ["category", "value"], key="admin_reference_data")
         with st.form("add_ref"):
             value = st.text_input("New reference value")
             comments = st.text_area("Maker-checker comments")
@@ -1074,7 +1312,9 @@ def page_admin() -> None:
                 else:
                     st.error("Value is required.")
     with tabs[1]:
-        safe_df(svc.required_rules_table(), height=320)
+        rules_df = svc.required_rules_table()
+        safe_df(rules_df, height=320)
+        delete_record_panel("Required Artifact Rule", rules_df, "rule_id", ["risk_level", "required_document_type"], key="admin_rule")
         with st.form("add_rule"):
             c1, c2, c3 = st.columns(3)
             risk = c1.selectbox("Risk level", RISK_LEVELS)
@@ -1089,7 +1329,9 @@ def page_admin() -> None:
                 st.success("Rule created.")
                 rerun()
     with tabs[2]:
-        safe_df(svc.due_date_rules_table(), height=360)
+        due_rules_df = svc.due_date_rules_table()
+        safe_df(due_rules_df, height=360)
+        delete_record_panel("Due-date Rule", due_rules_df, "rule_id", ["task_type", "due_days"], key="admin_due_rule")
         st.caption("Due-date rule editing is represented in the data model. The MVP uses default seeded rules for generated tasks.")
     with tabs[3]:
         st.warning("The app auto-seeds an empty local database for demo readiness. Use the command-line seed script for controlled resets.")
@@ -1143,6 +1385,7 @@ def route(page: str) -> None:
 
 def main() -> None:
     bootstrap()
+    apply_query_params()
     if "role" not in st.session_state:
         st.session_state["role"] = ROLES[0]
     if "username" not in st.session_state:

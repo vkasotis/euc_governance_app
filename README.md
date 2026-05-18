@@ -96,6 +96,7 @@ The login is a demo scaffold only. It is isolated in the Streamlit session-state
 - Automatic inherent/residual risk update on assessment submission
 - Evidence upload to local `/uploads` storage
 - Evidence metadata: document type, requirement, control area, CACRT dimension, lifecycle stage, risk applicability, version, and status
+- Risk Assessment is not uploaded as evidence; the checklist uses the completed Risk Assessment record for the selected EUC
 - GCC/Data Validation evidence review with accept/reject/comment/deficiency tagging
 - Required artifact checklist based on residual risk
 - Automatic follow-up tasks for missing/rejected/expired mandatory artifacts
@@ -107,6 +108,7 @@ The login is a demo scaffold only. It is isolated in the Streamlit session-state
 - Industrialization candidate and controlled decommissioning flow
 - Dashboard cards, charts, reporting filters, and CSV export
 - Immutable audit trail viewer from the UI
+- Governed hard-delete actions for GCC and Group IT Governance Administrator, with retained DELETE audit-trail snapshots
 - Admin reference data and required artifact rule management, including maker-checker comment fields
 
 ## Risk assessment methodology
@@ -120,7 +122,7 @@ The assessment flow is:
 3. Capture owner inherent levels for the two policy dimensions:
    - Integrity / Accuracy
    - Timeliness / Availability
-4. If the EUC materially supports BCBS 239, the effective inherent risk for both dimensions is forced to `Very High`.
+4. If the EUC materially supports BCBS 239, both inherent-risk dimensions are automatically forced to `Very High` and stored that way in the assessment history.
 5. Capture the eight baseline control areas:
    - Registration & risk assessment
    - Privileged Access
@@ -146,7 +148,11 @@ Default mandatory evidence rules:
 | High | Risk Assessment, Operating Procedure, Library of Controls, Testing Evidence, Reconciliation Evidence, Review Evidence |
 | Very High | Risk Assessment, Operating Procedure, Library of Controls, Testing Evidence, Reconciliation Evidence, Resilience Evidence, Review Evidence, Approval Evidence |
 
-These rules are inserted into the `required_artifact_rules` table and can be extended from Admin Configuration.
+These rules are inserted into the `required_artifact_rules` table and can be extended from Admin Configuration. The `Risk Assessment` requirement is satisfied by the latest row in `risk_assessments`; users should not upload a separate Risk Assessment file in the Documents & Evidence Pack.
+
+## Governed deletion
+
+GCC and Group IT Governance Administrator roles can delete MVP records from the relevant list/detail pages. Deletes are hard deletes from the SQLite MVP tables, but every delete writes an immutable audit-trail entry containing the deleted row snapshot. EUC deletion explicitly removes dependent assets, assessments, documents, tasks, findings, reviews, exceptions, incidents, and material changes while retaining the audit trail.
 
 ## Local run
 
@@ -220,3 +226,17 @@ streamlit run app.py
 ```
 
 The app will recreate seed data on next launch.
+
+## Patch notes - Excel risk-assessment alignment
+
+This version implements the risk-assessment workbook logic more closely:
+
+- Owner inherent risk is captured separately from effective inherent risk.
+- Owner inherent risk input supports only Low, Medium, and High, matching the workbook input cells.
+- If any BCBS 239 materiality question is Yes, both effective inherent-risk dimensions are calculated as Very High.
+- Overall inherent risk is the higher of the effective Integrity / Accuracy and Timeliness / Availability inherent risks.
+- Control effectiveness is derived separately for each dimension using the workbook control subsets.
+- N/A is available only for EUC Library of Controls / CACRT and Evidence & sign-off.
+- Residual risk is calculated through the workbook residual-risk matrix.
+- Material BCBS 239 EUCs cannot have overall residual risk below Medium.
+- Documents & Evidence Pack no longer expects risk assessment uploads. Completed risk assessments appear as evidence links and can be opened for review from the evidence pack.

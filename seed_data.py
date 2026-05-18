@@ -198,7 +198,7 @@ def seed_database(force: bool = False) -> None:
 
     # Evidence mix: accepted, submitted, rejected, and intentionally missing artifacts.
     for euc_id in created_ids[:7]:
-        _doc(euc_id, "Risk Assessment", "Accepted")
+        # Risk Assessment is satisfied from the risk_assessments table, not by an uploaded document.
         _doc(euc_id, "Operating Procedure", "Accepted")
     for euc_id in created_ids[1:5]:
         _doc(euc_id, "Library of Controls", "Submitted")
