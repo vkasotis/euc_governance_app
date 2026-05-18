@@ -192,3 +192,16 @@ The app will recreate seed data on next launch.
 ## Dashboard visibility note
 
 The Home / Dashboard page uses a personal scope. It shows EUCs, tasks, findings, exceptions, incidents, and charts relevant to the logged-in user context: owned EUCs, delegated EUCs, records created by the user, tasks assigned to the user, and role-queue tasks for centralized governance roles. Portfolio-wide monitoring remains available through the GCC Monitoring View and Reports & KPIs pages according to role permissions.
+
+## Patch note: Admin User Directory
+
+The Group IT Governance Administrator can manage users from `Admin Configuration` -> `User directory`.
+
+1. Log in with role `Group IT Governance Administrator`.
+2. Open `Admin Configuration` from the sidebar.
+3. Open the `User directory` tab.
+4. Select a user row in the table, or use the fallback `Selected user` dropdown.
+5. Update username, full name, email, role, active flag, and comments.
+6. Click `Save selected user`.
+
+User profile changes are written to the audit trail. Active users also feed the MVP login username suggestions for each role.

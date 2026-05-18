@@ -240,6 +240,29 @@ CREATE_TABLES_SQL = [
         control_effectiveness_score INTEGER NOT NULL,
         inherent_risk TEXT NOT NULL,
         residual_risk TEXT NOT NULL,
+        materiality_q1 TEXT,
+        materiality_q2 TEXT,
+        materiality_q3 TEXT,
+        materially_supports_bcbs239 TEXT,
+        owner_integrity_inherent TEXT,
+        owner_timeliness_inherent TEXT,
+        effective_integrity_inherent TEXT,
+        effective_timeliness_inherent TEXT,
+        integrity_control_effectiveness TEXT,
+        timeliness_control_effectiveness TEXT,
+        integrity_residual_risk TEXT,
+        timeliness_residual_risk TEXT,
+        overall_inherent_risk TEXT,
+        overall_residual_risk TEXT,
+        required_action TEXT,
+        control_registration_risk_assessment TEXT,
+        control_privileged_access TEXT,
+        control_versioning_change_log TEXT,
+        control_checks_reconciliations TEXT,
+        control_library_controls_cacrt TEXT,
+        control_operating_procedure TEXT,
+        control_evidence_signoff TEXT,
+        control_resilience TEXT,
         rationale TEXT,
         trigger_type TEXT,
         version INTEGER NOT NULL,
@@ -391,6 +414,21 @@ CREATE_TABLES_SQL = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS user_profiles (
+        user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        full_name TEXT,
+        email TEXT,
+        role TEXT NOT NULL,
+        active_flag INTEGER NOT NULL DEFAULT 1,
+        maker_checker_comments TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_by TEXT,
+        updated_at TEXT NOT NULL
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS audit_trail (
         audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
         entity_type TEXT NOT NULL,
@@ -438,4 +476,5 @@ INDEX_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_tasks_role_status ON tasks(assigned_role, status);",
     "CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status);",
     "CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_trail(entity_type, entity_id);",
+    "CREATE INDEX IF NOT EXISTS idx_user_profiles_role ON user_profiles(role, active_flag);",
 ]

@@ -18,6 +18,7 @@ from schema import (
     DOCUMENT_TYPES,
     LIFECYCLE_STATUSES,
     RISK_LEVELS,
+    ROLES,
     TASK_TYPES,
 )
 
@@ -53,8 +54,134 @@ DEFAULT_DUE_DAYS = {
 }
 
 
+def _default_email(username: str) -> str:
+    local = re.sub(r"[^a-z0-9._-]", ".", username.lower()).strip(".") or "demo.user"
+    return f"{local}@eurobank.gr"
+
+
 def username_options_for_role(role: str) -> list[str]:
+    """Return active usernames for the selected role.
+
+    The MVP login remains intentionally simple, but this now reads from the
+    administrator-maintained user directory when available. If the local DB is
+    not initialized yet, it falls back to the seeded role defaults.
+    """
+    try:
+        rows = fetch_all(
+            "SELECT username FROM user_profiles WHERE role = ? AND active_flag = 1 ORDER BY username",
+            (role,),
+        )
+        if rows:
+            return [row["username"] for row in rows]
+    except Exception:
+        pass
     return ROLE_USERNAMES.get(role, ["Demo.User"])
+
+
+def seed_user_profiles(username: str = "system") -> None:
+    for role, users in ROLE_USERNAMES.items():
+        for login in users:
+            execute(
+                """
+                INSERT OR IGNORE INTO user_profiles(
+                    username, full_name, email, role, active_flag, maker_checker_comments,
+                    created_by, created_at, updated_by, updated_at
+                ) VALUES (?, ?, ?, ?, 1, 'Seeded MVP user profile.', ?, ?, ?, ?)
+                """,
+                (
+                    login,
+                    login.replace(".", " "),
+                    _default_email(login),
+                    role,
+                    username,
+                    utc_now(),
+                    username,
+                    utc_now(),
+                ),
+            )
+
+
+def user_profiles_table(active_only: bool = False) -> pd.DataFrame:
+    sql = """
+        SELECT user_id, username, full_name, email, role, active_flag, maker_checker_comments, updated_at
+        FROM user_profiles
+    """
+    params: tuple[Any, ...] = ()
+    if active_only:
+        sql += " WHERE active_flag = 1"
+    sql += " ORDER BY role, username"
+    return dataframe(sql, params)
+
+
+def get_user_profile(user_id: int) -> dict[str, Any] | None:
+    return fetch_one("SELECT * FROM user_profiles WHERE user_id = ?", (user_id,))
+
+
+def upsert_user_profile(payload: dict[str, Any], performed_by: str) -> int:
+    now = utc_now()
+    existing = fetch_one("SELECT * FROM user_profiles WHERE username = ?", (payload["username"],))
+    if existing:
+        update_user_profile(int(existing["user_id"]), payload, performed_by)
+        return int(existing["user_id"])
+    user_id = execute(
+        """
+        INSERT INTO user_profiles(
+            username, full_name, email, role, active_flag, maker_checker_comments,
+            created_by, created_at, updated_by, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["username"],
+            payload.get("full_name"),
+            payload.get("email"),
+            payload["role"],
+            int(bool(payload.get("active_flag", True))),
+            payload.get("maker_checker_comments"),
+            performed_by,
+            now,
+            performed_by,
+            now,
+        ),
+    )
+    insert_audit("User Profile", user_id, "CREATE", performed_by, None, payload)
+    return user_id
+
+
+def update_user_profile(user_id: int, payload: dict[str, Any], performed_by: str) -> None:
+    old = get_user_profile(user_id)
+    if not old:
+        raise ValueError(f"User profile {user_id} was not found")
+    execute(
+        """
+        UPDATE user_profiles
+        SET username = ?, full_name = ?, email = ?, role = ?, active_flag = ?,
+            maker_checker_comments = ?, updated_by = ?, updated_at = ?
+        WHERE user_id = ?
+        """,
+        (
+            payload["username"],
+            payload.get("full_name"),
+            payload.get("email"),
+            payload["role"],
+            int(bool(payload.get("active_flag", True))),
+            payload.get("maker_checker_comments"),
+            performed_by,
+            utc_now(),
+            user_id,
+        ),
+    )
+    insert_audit("User Profile", user_id, "UPDATE", performed_by, old, payload)
+
+
+def deactivate_user_profile(user_id: int, performed_by: str) -> None:
+    old = get_user_profile(user_id)
+    if not old:
+        raise ValueError(f"User profile {user_id} was not found")
+    execute(
+        "UPDATE user_profiles SET active_flag = 0, updated_by = ?, updated_at = ? WHERE user_id = ?",
+        (performed_by, utc_now(), user_id),
+    )
+    insert_audit("User Profile", user_id, "DEACTIVATE", performed_by, old, {"active_flag": 0})
 
 
 def is_read_only(role: str) -> bool:
@@ -106,6 +233,130 @@ def risk_level_from_average(avg: float) -> str:
     if avg < 4.0:
         return "High"
     return "Very High"
+
+
+RISK_ORDER = {"Low": 1, "Medium": 2, "High": 3, "Very High": 4}
+RISK_FROM_ORDER = {value: key for key, value in RISK_ORDER.items()}
+
+OWNER_INHERENT_LEVELS = ["Low", "Medium", "High"]
+CONTROL_STATUS_CORE = ["In place and evidenced", "Partially in place", "Not in place"]
+CONTROL_STATUS_WITH_NA = CONTROL_STATUS_CORE + ["N/A"]
+CONTROL_COLUMNS = {
+    "registration_risk_assessment": "control_registration_risk_assessment",
+    "privileged_access": "control_privileged_access",
+    "versioning_change_log": "control_versioning_change_log",
+    "checks_reconciliations": "control_checks_reconciliations",
+    "library_controls_cacrt": "control_library_controls_cacrt",
+    "operating_procedure": "control_operating_procedure",
+    "evidence_signoff": "control_evidence_signoff",
+    "resilience": "control_resilience",
+}
+RESIDUAL_MATRIX = {
+    "Very High": {"Strong": "Medium", "Adequate": "High", "Weak": "Very High", "Not in place": "Very High"},
+    "High": {"Strong": "Low", "Adequate": "Medium", "Weak": "High", "Not in place": "High"},
+    "Medium": {"Strong": "Low", "Adequate": "Low", "Weak": "Medium", "Not in place": "Medium"},
+    "Low": {"Strong": "Low", "Adequate": "Low", "Weak": "Low", "Not in place": "Low"},
+}
+REQUIRED_ACTION_BY_RESIDUAL = {
+    "Very High": "Outside tolerance; escalation and time-bound remediation required; do not operate material-report EUCs with unmitigated Very High residual risk.",
+    "High": "Remediation plan required with target dates; consider exception governance if temporary operation is needed.",
+    "Medium": "Operate with monitoring and timely remediation of gaps.",
+    "Low": "Maintain controls and reassess on change.",
+}
+
+
+def _risk_score(level: str | None) -> int:
+    return RISK_ORDER.get(str(level or "Medium"), 2)
+
+
+def _max_risk(levels: list[str]) -> str:
+    return RISK_FROM_ORDER[max(_risk_score(level) for level in levels)]
+
+
+def derive_control_effectiveness(statuses: list[str]) -> str:
+    """Replicate the workbook's derived control effectiveness logic.
+
+    N/A is passive: it is part of the denominator but does not count as
+    evidenced, partial, or not-in-place. This matches the Excel formulas.
+    """
+    total = len(statuses)
+    not_in_place = statuses.count("Not in place")
+    evidenced = statuses.count("In place and evidenced")
+    partial = statuses.count("Partially in place")
+    if not_in_place >= 2:
+        return "Not in place"
+    if not_in_place == 1:
+        return "Weak"
+    if partial == total:
+        return "Weak"
+    if evidenced > total / 2:
+        return "Strong"
+    if evidenced >= 1:
+        return "Adequate"
+    return "Adequate"
+
+
+def calculate_excel_risk_assessment(payload: dict[str, Any]) -> dict[str, Any]:
+    """Calculate risk exactly according to the uploaded Excel workbook.
+
+    The owner-entered inherent levels are retained separately. BCBS 239
+    materiality forces only the effective inherent risk dimensions to Very High.
+    Residual risk then follows the workbook matrix, with a Medium floor for
+    material BCBS 239 EUCs.
+    """
+    materiality_answers = [payload.get("materiality_q1"), payload.get("materiality_q2"), payload.get("materiality_q3")]
+    material = any(str(answer).strip().lower() == "yes" for answer in materiality_answers)
+    owner_integrity = payload.get("owner_integrity_inherent") or payload.get("integrity_inherent") or "Medium"
+    owner_timeliness = payload.get("owner_timeliness_inherent") or payload.get("timeliness_inherent") or "Medium"
+    if owner_integrity not in OWNER_INHERENT_LEVELS:
+        owner_integrity = "Medium"
+    if owner_timeliness not in OWNER_INHERENT_LEVELS:
+        owner_timeliness = "Medium"
+
+    effective_integrity = "Very High" if material else owner_integrity
+    effective_timeliness = "Very High" if material else owner_timeliness
+
+    controls = {key: payload.get(column) or "Partially in place" for key, column in CONTROL_COLUMNS.items()}
+    integrity_statuses = [
+        controls["registration_risk_assessment"],
+        controls["privileged_access"],
+        controls["versioning_change_log"],
+        controls["checks_reconciliations"],
+        controls["library_controls_cacrt"],
+        controls["operating_procedure"],
+        controls["evidence_signoff"],
+    ]
+    timeliness_statuses = [
+        controls["registration_risk_assessment"],
+        controls["privileged_access"],
+        controls["library_controls_cacrt"],
+        controls["evidence_signoff"],
+        controls["resilience"],
+    ]
+
+    integrity_effectiveness = derive_control_effectiveness(integrity_statuses)
+    timeliness_effectiveness = derive_control_effectiveness(timeliness_statuses)
+    integrity_residual = RESIDUAL_MATRIX[effective_integrity][integrity_effectiveness]
+    timeliness_residual = RESIDUAL_MATRIX[effective_timeliness][timeliness_effectiveness]
+    overall_inherent = _max_risk([effective_integrity, effective_timeliness])
+    overall_residual = _max_risk([integrity_residual, timeliness_residual])
+    if material and _risk_score(overall_residual) < _risk_score("Medium"):
+        overall_residual = "Medium"
+
+    return {
+        "materially_supports_bcbs239": "Yes" if material else "No",
+        "owner_integrity_inherent": owner_integrity,
+        "owner_timeliness_inherent": owner_timeliness,
+        "effective_integrity_inherent": effective_integrity,
+        "effective_timeliness_inherent": effective_timeliness,
+        "integrity_control_effectiveness": integrity_effectiveness,
+        "timeliness_control_effectiveness": timeliness_effectiveness,
+        "integrity_residual_risk": integrity_residual,
+        "timeliness_residual_risk": timeliness_residual,
+        "overall_inherent_risk": overall_inherent,
+        "overall_residual_risk": overall_residual,
+        "required_action": REQUIRED_ACTION_BY_RESIDUAL[overall_residual],
+    }
 
 
 def generate_reference_id() -> str:
@@ -363,6 +614,10 @@ def get_components(euc_id: int) -> pd.DataFrame:
     return dataframe("SELECT * FROM components WHERE euc_id = ? ORDER BY component_id", (euc_id,))
 
 
+def get_component(component_id: int) -> dict[str, Any] | None:
+    return fetch_one("SELECT * FROM components WHERE component_id = ?", (component_id,))
+
+
 def create_component(payload: dict[str, Any], username: str) -> int:
     now = utc_now()
     component_id = execute(
@@ -386,22 +641,72 @@ def create_component(payload: dict[str, Any], username: str) -> int:
     return component_id
 
 
+def update_component(component_id: int, payload: dict[str, Any], username: str) -> None:
+    old = get_component(component_id)
+    if not old:
+        raise ValueError("Component not found")
+    allowed_fields = ["component_name", "component_type", "technology", "storage_location", "description", "criticality", "owner"]
+    assignments = ", ".join([f"{field} = ?" for field in allowed_fields])
+    values = [payload.get(field, old.get(field)) for field in allowed_fields]
+    values.append(component_id)
+    execute(f"UPDATE components SET {assignments} WHERE component_id = ?", tuple(values))
+    insert_audit("Component", component_id, "UPDATE", username, old, payload)
+
+
 def get_risk_assessments(euc_id: int) -> pd.DataFrame:
     return dataframe("SELECT * FROM risk_assessments WHERE euc_id = ? ORDER BY version DESC", (euc_id,))
 
 
 def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
-    scores = [
-        int(payload["integrity_accuracy_score"]),
-        int(payload["timeliness_availability_score"]),
-        int(payload["complexity_score"]),
-        int(payload["business_criticality_score"]),
-    ]
-    control_effectiveness = int(payload["control_effectiveness_score"])
-    inherent_avg = sum(scores) / len(scores)
-    residual_avg = (sum(scores) + control_effectiveness) / 5
-    inherent_risk = risk_level_from_average(inherent_avg)
-    residual_risk = risk_level_from_average(residual_avg)
+    """Create a versioned risk assessment.
+
+    Supports both the legacy MVP slider payload and the Excel-aligned payload.
+    The current UI uses the Excel-aligned path. Legacy support is retained so
+    old seed data or demo scripts continue to run.
+    """
+    is_excel_payload = any(key in payload for key in ("materiality_q1", "owner_integrity_inherent", "control_registration_risk_assessment"))
+
+    if is_excel_payload:
+        calculated = calculate_excel_risk_assessment(payload)
+        inherent_risk = calculated["overall_inherent_risk"]
+        residual_risk = calculated["overall_residual_risk"]
+        integrity_score = _risk_score(calculated["owner_integrity_inherent"])
+        timeliness_score = _risk_score(calculated["owner_timeliness_inherent"])
+        complexity_score = int(payload.get("complexity_score") or 1)
+        business_score = int(payload.get("business_criticality_score") or _risk_score(inherent_risk))
+        effect_rank = {"Strong": 1, "Adequate": 2, "Weak": 3, "Not in place": 4}
+        control_effectiveness_score = max(
+            effect_rank[calculated["integrity_control_effectiveness"]],
+            effect_rank[calculated["timeliness_control_effectiveness"]],
+        )
+    else:
+        scores = [
+            int(payload["integrity_accuracy_score"]),
+            int(payload["timeliness_availability_score"]),
+            int(payload["complexity_score"]),
+            int(payload["business_criticality_score"]),
+        ]
+        control_effectiveness_score = int(payload["control_effectiveness_score"])
+        inherent_avg = sum(scores) / len(scores)
+        residual_avg = (sum(scores) + control_effectiveness_score) / 5
+        inherent_risk = risk_level_from_average(inherent_avg)
+        residual_risk = risk_level_from_average(residual_avg)
+        integrity_score, timeliness_score, complexity_score, business_score = scores
+        calculated = {
+            "materially_supports_bcbs239": payload.get("materially_supports_bcbs239", "No"),
+            "owner_integrity_inherent": RISK_FROM_ORDER.get(min(max(integrity_score, 1), 4), inherent_risk),
+            "owner_timeliness_inherent": RISK_FROM_ORDER.get(min(max(timeliness_score, 1), 4), inherent_risk),
+            "effective_integrity_inherent": inherent_risk,
+            "effective_timeliness_inherent": inherent_risk,
+            "integrity_control_effectiveness": "Adequate",
+            "timeliness_control_effectiveness": "Adequate",
+            "integrity_residual_risk": residual_risk,
+            "timeliness_residual_risk": residual_risk,
+            "overall_inherent_risk": inherent_risk,
+            "overall_residual_risk": residual_risk,
+            "required_action": REQUIRED_ACTION_BY_RESIDUAL.get(residual_risk, "Maintain controls and reassess on change."),
+        }
+
     row = fetch_one("SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM risk_assessments WHERE euc_id = ?", (payload["euc_id"],))
     version = int(row["next_version"])
     now = utc_now()
@@ -410,22 +715,52 @@ def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
         INSERT INTO risk_assessments(
             euc_id, assessment_date, assessed_by, integrity_accuracy_score, timeliness_availability_score,
             complexity_score, business_criticality_score, control_effectiveness_score, inherent_risk, residual_risk,
+            materiality_q1, materiality_q2, materiality_q3, materially_supports_bcbs239,
+            owner_integrity_inherent, owner_timeliness_inherent, effective_integrity_inherent, effective_timeliness_inherent,
+            integrity_control_effectiveness, timeliness_control_effectiveness, integrity_residual_risk, timeliness_residual_risk,
+            overall_inherent_risk, overall_residual_risk, required_action,
+            control_registration_risk_assessment, control_privileged_access, control_versioning_change_log,
+            control_checks_reconciliations, control_library_controls_cacrt, control_operating_procedure,
+            control_evidence_signoff, control_resilience,
             rationale, trigger_type, version, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload["euc_id"],
             payload.get("assessment_date", date.today().isoformat()),
             payload.get("assessed_by", username),
-            scores[0],
-            scores[1],
-            scores[2],
-            scores[3],
-            control_effectiveness,
+            integrity_score,
+            timeliness_score,
+            complexity_score,
+            business_score,
+            control_effectiveness_score,
             inherent_risk,
             residual_risk,
+            payload.get("materiality_q1"),
+            payload.get("materiality_q2"),
+            payload.get("materiality_q3"),
+            calculated["materially_supports_bcbs239"],
+            calculated["owner_integrity_inherent"],
+            calculated["owner_timeliness_inherent"],
+            calculated["effective_integrity_inherent"],
+            calculated["effective_timeliness_inherent"],
+            calculated["integrity_control_effectiveness"],
+            calculated["timeliness_control_effectiveness"],
+            calculated["integrity_residual_risk"],
+            calculated["timeliness_residual_risk"],
+            calculated["overall_inherent_risk"],
+            calculated["overall_residual_risk"],
+            calculated["required_action"],
+            payload.get("control_registration_risk_assessment"),
+            payload.get("control_privileged_access"),
+            payload.get("control_versioning_change_log"),
+            payload.get("control_checks_reconciliations"),
+            payload.get("control_library_controls_cacrt"),
+            payload.get("control_operating_procedure"),
+            payload.get("control_evidence_signoff"),
+            payload.get("control_resilience"),
             payload.get("rationale"),
-            payload.get("trigger_type", "Manual trigger"),
+            payload.get("trigger_type", "Periodic"),
             version,
             now,
         ),
@@ -439,7 +774,7 @@ def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
         """,
         (inherent_risk, residual_risk, lifecycle, lifecycle, utc_now(), payload["euc_id"]),
     )
-    insert_audit("Risk Assessment", assessment_id, "CREATE", username, None, {**payload, "inherent_risk": inherent_risk, "residual_risk": residual_risk})
+    insert_audit("Risk Assessment", assessment_id, "CREATE", username, None, {**payload, **calculated, "inherent_risk": inherent_risk, "residual_risk": residual_risk})
     evaluate_and_update_completeness(payload["euc_id"], username, create_missing_tasks=True)
     return assessment_id
 
@@ -591,24 +926,41 @@ def required_documents_for_euc(euc_id: int) -> pd.DataFrame:
 def artifact_checklist(euc_id: int) -> pd.DataFrame:
     required = required_documents_for_euc(euc_id)
     docs = get_documents(euc_id)
+    assessments = get_risk_assessments(euc_id)
     rows: list[dict[str, Any]] = []
     for _, req in required.iterrows():
         doc_type = req["required_document_type"]
-        matching = docs[docs["document_type"] == doc_type] if not docs.empty else pd.DataFrame()
-        if matching.empty:
-            status = "Missing"
-            document_id = None
-            reviewed_by = None
-            comments = None
+        if doc_type == "Risk Assessment":
+            if assessments.empty:
+                status = "Missing"
+                document_id = None
+                assessment_id = None
+                reviewed_by = None
+                comments = "Complete the Risk Assessment module for this EUC. No upload is required."
+            else:
+                latest = assessments.iloc[0]
+                status = "Accepted"
+                document_id = None
+                assessment_id = int(latest["assessment_id"])
+                reviewed_by = latest.get("assessed_by")
+                comments = f"Satisfied by risk assessment #{assessment_id}, version {latest.get('version')}."
         else:
-            status_priority = {"Accepted": 1, "Submitted": 2, "Rejected": 3, "Expired": 4, "Pending": 5, "Missing": 6, "Superseded": 7}
-            matching = matching.copy()
-            matching["_rank"] = matching["status"].map(status_priority).fillna(99)
-            best = matching.sort_values(["_rank", "uploaded_at"]).iloc[0]
-            status = best["status"]
-            document_id = int(best["document_id"])
-            reviewed_by = best.get("reviewed_by")
-            comments = best.get("comments")
+            matching = docs[docs["document_type"] == doc_type] if not docs.empty else pd.DataFrame()
+            assessment_id = None
+            if matching.empty:
+                status = "Missing"
+                document_id = None
+                reviewed_by = None
+                comments = None
+            else:
+                status_priority = {"Accepted": 1, "Submitted": 2, "Rejected": 3, "Expired": 4, "Pending": 5, "Missing": 6, "Superseded": 7}
+                matching = matching.copy()
+                matching["_rank"] = matching["status"].map(status_priority).fillna(99)
+                best = matching.sort_values(["_rank", "uploaded_at"]).iloc[0]
+                status = best["status"]
+                document_id = int(best["document_id"])
+                reviewed_by = best.get("reviewed_by")
+                comments = best.get("comments")
         rows.append(
             {
                 "document_type": doc_type,
@@ -617,6 +969,7 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
                 "cacrt_dimension": req.get("cacrt_dimension"),
                 "status": status,
                 "document_id": document_id,
+                "assessment_id": assessment_id,
                 "reviewed_by": reviewed_by,
                 "comments": comments,
             }
@@ -1259,6 +1612,7 @@ def due_date_rules_table() -> pd.DataFrame:
 
 def initialize_reference_data(username: str = "system") -> None:
     seed_required_rules(username)
+    seed_user_profiles(username)
     constants = {
         "document_type": DOCUMENT_TYPES,
         "lifecycle_status": LIFECYCLE_STATUSES,
