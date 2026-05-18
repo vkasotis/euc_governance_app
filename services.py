@@ -26,6 +26,7 @@ from schema import (
     LIFECYCLE_STATUSES,
     RISK_ASSESSMENT_TYPES,
     RISK_LEVELS,
+    ROLES,
     TASK_TYPES,
     TECHNOLOGY_TYPES,
 )
@@ -169,33 +170,64 @@ def get_user_profile(username: str | None) -> dict[str, Any] | None:
     return fetch_one("SELECT * FROM user_profiles WHERE username = ?", (username,))
 
 
-def upsert_user_profile(payload: dict[str, Any], performed_by: str) -> int:
+def _validate_user_profile_payload(payload: dict[str, Any]) -> None:
+    """Validate the local MVP user directory record."""
     required = ["username", "full_name", "email", "role"]
     missing = [field for field in required if not str(payload.get(field, "")).strip()]
     if missing:
         raise ValueError("Missing mandatory user fields: " + ", ".join(missing))
-    if "@" not in payload["email"]:
+    if "@" not in str(payload.get("email", "")):
         raise ValueError("A valid email address is required.")
+    if payload.get("role") not in ROLES:
+        raise ValueError("Role is not valid for this application.")
+
+
+def update_user_profile(user_id: int, payload: dict[str, Any], performed_by: str) -> int:
+    """Update a selected user profile by stable user_id.
+
+    This supports table-driven editing in Admin Configuration and avoids
+    accidentally creating a second user when an administrator edits the
+    username of an existing profile.
+    """
+    _validate_user_profile_payload(payload)
+    old = fetch_one("SELECT * FROM user_profiles WHERE user_id = ?", (int(user_id),))
+    if not old:
+        raise ValueError("Selected user profile no longer exists.")
+    duplicate = fetch_one(
+        "SELECT user_id FROM user_profiles WHERE username = ? AND user_id <> ?",
+        (payload["username"], int(user_id)),
+    )
+    if duplicate:
+        raise ValueError("Another user profile already uses this username.")
+    now = utc_now()
+    execute(
+        """
+        UPDATE user_profiles
+        SET username = ?, full_name = ?, email = ?, role = ?, active_flag = ?, updated_at = ?
+        WHERE user_id = ?
+        """,
+        (
+            payload["username"],
+            payload["full_name"],
+            payload["email"],
+            payload["role"],
+            int(bool(payload.get("active_flag", True))),
+            now,
+            int(user_id),
+        ),
+    )
+    new_snapshot = dict(payload)
+    new_snapshot.update({"user_id": int(user_id), "updated_at": now})
+    insert_audit("User Profile", int(user_id), "UPDATE", performed_by, old, new_snapshot)
+    return int(user_id)
+
+
+def upsert_user_profile(payload: dict[str, Any], performed_by: str) -> int:
+    _validate_user_profile_payload(payload)
     old = get_user_profile(payload["username"])
     now = utc_now()
     if old:
-        execute(
-            """
-            UPDATE user_profiles
-            SET full_name = ?, email = ?, role = ?, active_flag = ?, updated_at = ?
-            WHERE username = ?
-            """,
-            (
-                payload["full_name"],
-                payload["email"],
-                payload["role"],
-                int(bool(payload.get("active_flag", True))),
-                now,
-                payload["username"],
-            ),
-        )
-        insert_audit("User Profile", payload["username"], "UPDATE", performed_by, old, payload)
-        return int(old.get("user_id") or 0)
+        return update_user_profile(int(old["user_id"]), payload, performed_by)
     user_id = execute(
         """
         INSERT INTO user_profiles(username, full_name, email, role, active_flag, created_at, updated_at)
@@ -1833,6 +1865,196 @@ def initialize_reference_data(username: str = "system") -> None:
             """,
             (task_type, days, username, username),
         )
+
+
+
+# ---------------------------------------------------------------------------
+# Record update helpers used by table-select/edit UI patterns.
+# These functions intentionally keep updates explicit and write audit events.
+# ---------------------------------------------------------------------------
+
+def get_task(task_id: int) -> dict[str, Any] | None:
+    return fetch_one("SELECT * FROM tasks WHERE task_id = ?", (int(task_id),))
+
+
+def update_task_full(task_id: int, payload: dict[str, Any], username: str) -> None:
+    old = get_task(int(task_id))
+    if not old:
+        raise ValueError("Task not found")
+    allowed = ["task_type", "title", "description", "assigned_to", "assigned_role", "due_date", "status", "priority", "closure_reason", "closure_evidence_document_id"]
+    if not str(payload.get("title", old.get("title") or "")).strip():
+        raise ValueError("Task title is required.")
+    status = payload.get("status", old.get("status"))
+    closed_at = utc_now() if status in {"Closed", "Cancelled"} else None
+    assignments = ", ".join([f"{field} = ?" for field in allowed]) + ", closed_at = ?"
+    values = [payload.get(field, old.get(field)) for field in allowed] + [closed_at, int(task_id)]
+    execute(f"UPDATE tasks SET {assignments} WHERE task_id = ?", tuple(values))
+    insert_audit("Task", int(task_id), "UPDATE", username, old, {field: payload.get(field, old.get(field)) for field in allowed})
+
+
+def update_document_metadata(document_id: int, payload: dict[str, Any], username: str, review_update: bool = False) -> None:
+    old = fetch_one("SELECT * FROM documents WHERE document_id = ?", (int(document_id),))
+    if not old:
+        raise ValueError("Document not found")
+    allowed = ["document_type", "comments", "deficiency_tag"]
+    if review_update:
+        allowed += ["status", "reviewed_by", "reviewed_at"]
+    if not str(payload.get("document_type", old.get("document_type") or "")).strip():
+        raise ValueError("Document type is required.")
+    update_payload = dict(payload)
+    if review_update:
+        update_payload["reviewed_by"] = username
+        update_payload["reviewed_at"] = utc_now()
+    assignments = ", ".join([f"{field} = ?" for field in allowed])
+    values = [update_payload.get(field, old.get(field)) for field in allowed] + [int(document_id)]
+    execute(f"UPDATE documents SET {assignments} WHERE document_id = ?", tuple(values))
+    action = "REVIEW" if review_update else "UPDATE"
+    insert_audit("Document", int(document_id), action, username, old, {field: update_payload.get(field, old.get(field)) for field in allowed})
+    evaluate_and_update_completeness(int(old["euc_id"]), username, create_missing_tasks=review_update)
+
+
+def update_review(review_id: int, payload: dict[str, Any], username: str) -> None:
+    old = fetch_one("SELECT * FROM reviews WHERE review_id = ?", (int(review_id),))
+    if not old:
+        raise ValueError("Review not found")
+    allowed = ["review_type", "outcome", "comments", "review_date"]
+    assignments = ", ".join([f"{field} = ?" for field in allowed])
+    values = [payload.get(field, old.get(field)) for field in allowed] + [int(review_id)]
+    execute(f"UPDATE reviews SET {assignments} WHERE review_id = ?", tuple(values))
+    insert_audit("Review", int(review_id), "UPDATE", username, old, {field: payload.get(field, old.get(field)) for field in allowed})
+
+
+def update_finding_full(finding_id: int, payload: dict[str, Any], username: str) -> None:
+    old = fetch_one("SELECT * FROM findings WHERE finding_id = ?", (int(finding_id),))
+    if not old:
+        raise ValueError("Finding not found")
+    if not str(payload.get("finding_description", old.get("finding_description") or "")).strip():
+        raise ValueError("Finding description is required.")
+    allowed = ["severity", "requirement", "control_area", "finding_description", "remediation_required", "assigned_to", "due_date", "status", "closure_comments"]
+    status = payload.get("status", old.get("status"))
+    closed_at = utc_now() if status == "Closed" else None
+    assignments = ", ".join([f"{field} = ?" for field in allowed]) + ", closed_at = ?"
+    values = [payload.get(field, old.get(field)) for field in allowed] + [closed_at, int(finding_id)]
+    execute(f"UPDATE findings SET {assignments} WHERE finding_id = ?", tuple(values))
+    insert_audit("Finding", int(finding_id), "UPDATE", username, old, {field: payload.get(field, old.get(field)) for field in allowed})
+
+
+def update_exception_full(exception_id: int, payload: dict[str, Any], username: str) -> None:
+    old = fetch_one("SELECT * FROM exceptions WHERE exception_id = ?", (int(exception_id),))
+    if not old:
+        raise ValueError("Exception not found")
+    if not str(payload.get("control_gap", old.get("control_gap") or "")).strip():
+        raise ValueError("Control gap is required.")
+    allowed = ["control_gap", "root_cause", "compensating_controls", "residual_risk", "remediation_plan", "target_date", "expiry_date", "approval_status", "approved_by", "status", "closure_evidence_document_id"]
+    assignments = ", ".join([f"{field} = ?" for field in allowed])
+    values = [payload.get(field, old.get(field)) for field in allowed] + [int(exception_id)]
+    execute(f"UPDATE exceptions SET {assignments} WHERE exception_id = ?", tuple(values))
+    insert_audit("Exception", int(exception_id), "UPDATE", username, old, {field: payload.get(field, old.get(field)) for field in allowed})
+
+
+def update_incident(incident_id: int, payload: dict[str, Any], username: str) -> None:
+    old = fetch_one("SELECT * FROM incidents WHERE incident_id = ?", (int(incident_id),))
+    if not old:
+        raise ValueError("Incident not found")
+    allowed = ["affected_outputs", "incident_date", "impact_summary", "containment_status", "correction_status", "rca_status", "remediation_actions", "status"]
+    assignments = ", ".join([f"{field} = ?" for field in allowed])
+    values = [payload.get(field, old.get(field)) for field in allowed] + [int(incident_id)]
+    execute(f"UPDATE incidents SET {assignments} WHERE incident_id = ?", tuple(values))
+    insert_audit("Incident", int(incident_id), "UPDATE", username, old, {field: payload.get(field, old.get(field)) for field in allowed})
+
+
+def update_material_change(change_id: int, payload: dict[str, Any], username: str) -> None:
+    old = fetch_one("SELECT * FROM material_changes WHERE change_id = ?", (int(change_id),))
+    if not old:
+        raise ValueError("Material change not found")
+    if not str(payload.get("description", old.get("description") or "")).strip():
+        raise ValueError("Description is required.")
+    allowed = ["change_type", "description", "impact_assessment", "reassessment_required", "documentation_refresh_required", "status"]
+    update_payload = dict(payload)
+    update_payload["reassessment_required"] = int(bool(update_payload.get("reassessment_required", old.get("reassessment_required"))))
+    update_payload["documentation_refresh_required"] = int(bool(update_payload.get("documentation_refresh_required", old.get("documentation_refresh_required"))))
+    assignments = ", ".join([f"{field} = ?" for field in allowed])
+    values = [update_payload.get(field, old.get(field)) for field in allowed] + [int(change_id)]
+    execute(f"UPDATE material_changes SET {assignments} WHERE change_id = ?", tuple(values))
+    insert_audit("Material Change", int(change_id), "UPDATE", username, old, {field: update_payload.get(field, old.get(field)) for field in allowed})
+
+
+def update_required_rule(rule_id: int, payload: dict[str, Any], username: str) -> None:
+    old = fetch_one("SELECT * FROM required_artifact_rules WHERE rule_id = ?", (int(rule_id),))
+    if not old:
+        raise ValueError("Required artifact rule not found")
+    allowed = ["risk_level", "lifecycle_stage", "required_document_type", "control_area", "cacrt_dimension", "mandatory_flag", "maker_checker_comments", "approval_status", "approved_by"]
+    update_payload = dict(payload)
+    update_payload["mandatory_flag"] = int(bool(update_payload.get("mandatory_flag", old.get("mandatory_flag"))))
+    if update_payload.get("approval_status") == "Approved" and not update_payload.get("approved_by"):
+        update_payload["approved_by"] = username
+    assignments = ", ".join([f"{field} = ?" for field in allowed])
+    values = [update_payload.get(field, old.get(field)) for field in allowed] + [int(rule_id)]
+    execute(f"UPDATE required_artifact_rules SET {assignments} WHERE rule_id = ?", tuple(values))
+    insert_audit("Required Artifact Rule", int(rule_id), "UPDATE", username, old, {field: update_payload.get(field, old.get(field)) for field in allowed})
+
+
+def update_reference_value(ref_id: int, payload: dict[str, Any], username: str) -> None:
+    old = fetch_one("SELECT * FROM reference_data WHERE ref_id = ?", (int(ref_id),))
+    if not old:
+        raise ValueError("Reference data row not found")
+    if not str(payload.get("value", old.get("value") or "")).strip():
+        raise ValueError("Reference value is required.")
+    duplicate = fetch_one(
+        "SELECT ref_id FROM reference_data WHERE category = ? AND value = ? AND ref_id <> ?",
+        (payload.get("category", old.get("category")), payload.get("value", old.get("value")), int(ref_id)),
+    )
+    if duplicate:
+        raise ValueError("A reference value with this category and value already exists.")
+    allowed = ["category", "value", "active_flag", "maker_checker_comments", "approval_status", "approved_by"]
+    update_payload = dict(payload)
+    update_payload["active_flag"] = int(bool(update_payload.get("active_flag", old.get("active_flag"))))
+    if update_payload.get("approval_status") == "Approved" and not update_payload.get("approved_by"):
+        update_payload["approved_by"] = username
+    assignments = ", ".join([f"{field} = ?" for field in allowed])
+    values = [update_payload.get(field, old.get(field)) for field in allowed] + [int(ref_id)]
+    execute(f"UPDATE reference_data SET {assignments} WHERE ref_id = ?", tuple(values))
+    insert_audit("Reference Data", int(ref_id), "UPDATE", username, old, {field: update_payload.get(field, old.get(field)) for field in allowed})
+
+
+def create_due_date_rule(payload: dict[str, Any], username: str) -> int:
+    rule_id = execute(
+        """
+        INSERT INTO due_date_rules(task_type, risk_level, due_days, active_flag, maker_checker_comments, proposed_by, approved_by, approval_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["task_type"],
+            payload.get("risk_level", "Any"),
+            int(payload["due_days"]),
+            int(bool(payload.get("active_flag", True))),
+            payload.get("maker_checker_comments"),
+            username,
+            username if payload.get("approval_status", "Approved") == "Approved" else None,
+            payload.get("approval_status", "Approved"),
+        ),
+    )
+    insert_audit("Due-date Rule", rule_id, "CREATE", username, None, payload)
+    return rule_id
+
+
+def update_due_date_rule(rule_id: int, payload: dict[str, Any], username: str) -> None:
+    old = fetch_one("SELECT * FROM due_date_rules WHERE rule_id = ?", (int(rule_id),))
+    if not old:
+        raise ValueError("Due-date rule not found")
+    allowed = ["task_type", "risk_level", "due_days", "active_flag", "maker_checker_comments", "approval_status", "approved_by"]
+    update_payload = dict(payload)
+    update_payload["due_days"] = int(update_payload.get("due_days", old.get("due_days")))
+    update_payload["active_flag"] = int(bool(update_payload.get("active_flag", old.get("active_flag"))))
+    if update_payload.get("approval_status") == "Approved" and not update_payload.get("approved_by"):
+        update_payload["approved_by"] = username
+    assignments = ", ".join([f"{field} = ?" for field in allowed])
+    values = [update_payload.get(field, old.get(field)) for field in allowed] + [int(rule_id)]
+    try:
+        execute(f"UPDATE due_date_rules SET {assignments} WHERE rule_id = ?", tuple(values))
+    except Exception as exc:
+        raise ValueError("A due-date rule with this task type and risk level may already exist.") from exc
+    insert_audit("Due-date Rule", int(rule_id), "UPDATE", username, old, {field: update_payload.get(field, old.get(field)) for field in allowed})
 
 
 def close_open_obligations_for_decommissioning(euc_id: int, username: str) -> dict[str, int]:

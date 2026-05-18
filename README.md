@@ -252,3 +252,20 @@ This version also includes the following workflow refinements:
 - Components / EUC Asset Inventory allows a user to select an asset row and edit the linked component record.
 - Documents & Evidence Pack uses a simplified evidence-upload form: document type, file, comments, and automatic initial status of Submitted.
 - The Required Artifact Checklist is embedded directly in the Documents & Evidence Pack page so users can see pending and completed artifacts before uploading evidence.
+
+## Patch 6 — record-level edit controls
+
+This version extends page-level maintenance so that operational records can be selected from tables and edited according to the MVP permission model:
+
+- EUC Inventory: select an EUC and edit the selected master record when permitted.
+- Risk Assessment: completed assessments are reviewable and amendments are handled by submitting a new version rather than overwriting history.
+- Documents & Evidence Pack: select uploaded evidence to update metadata/comments, and GCC/Data Validation/Admin can update review status and deficiencies.
+- Tasks & Remediation: select a task for the selected EUC and edit assignment, due date, priority, status, closure reason, and closure evidence depending on role.
+- Findings: select a finding and edit governance fields or owner response/closure request depending on role.
+- Exceptions: select an exception and edit exception details, approval/status fields, dates, and closure evidence according to role.
+- Incidents: select and update containment, correction, RCA, remediation, and status.
+- Material Changes: select and update change details, reassessment/documentation-refresh flags, impact assessment, and status.
+- Industrialization & Decommissioning: lifecycle status/rationale fields can be maintained from the lifecycle page.
+- Admin Configuration: reference data, required artifact rules, user profiles, and due-date rules can be selected from tables and edited.
+
+All update actions write an audit-trail record. Audit trail rows remain read-only in the UI.

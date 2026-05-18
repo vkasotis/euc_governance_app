@@ -292,6 +292,30 @@ def euc_selector(label: str = "Select EUC", include_empty: bool = False) -> dict
     return None
 
 
+
+def user_select_options(role_filter: str | None = None, include_blank: bool = True) -> list[str]:
+    users = svc.user_directory(role=role_filter, active_only=True)
+    values = users["username"].tolist() if users is not None and not users.empty else []
+    return ([""] if include_blank else []) + values
+
+
+def can_edit_operational_record(role: str, username: str, euc: dict[str, Any] | None, governance_roles: set[str] | None = None) -> bool:
+    if svc.is_read_only(role):
+        return False
+    governance_roles = governance_roles or {svc.GCC_ROLE, svc.ADMIN_ROLE}
+    return svc.can_edit_euc(role, username, euc) or role in governance_roles
+
+
+def _date_value(value: Any, fallback: date | None = None) -> date:
+    fallback = fallback or date.today()
+    try:
+        if value is None or value == "":
+            return fallback
+        return pd.to_datetime(value).date()
+    except Exception:
+        return fallback
+
+
 def show_login() -> None:
     st.sidebar.markdown(f"### {BANK_NAME}")
     st.sidebar.caption("MVP authentication scaffold")
@@ -385,11 +409,60 @@ def page_inventory() -> None:
     csv_download(filtered[show_cols], "euc_inventory.csv")
     delete_record_panel("EUC", filtered, "euc_id", ["reference_id", "name", "owner"], key="inventory_euc")
     if not filtered.empty:
-        selected_ref = st.selectbox("Open EUC in detail view", filtered["reference_id"].tolist())
-        if st.button("Set selected EUC"):
-            row = filtered[filtered["reference_id"] == selected_ref].iloc[0]
+        selected_ref = st.selectbox("Select EUC record", filtered["reference_id"].tolist())
+        row = filtered[filtered["reference_id"] == selected_ref].iloc[0]
+        selected = svc.get_euc(int(row["euc_id"]))
+        c_open, c_edit = st.columns([1, 3])
+        if c_open.button("Set selected EUC / open in Detail View"):
             st.session_state["selected_euc_id"] = int(row["euc_id"])
             st.success(f"Selected {selected_ref}. Use EUC Detail View to continue.")
+        if selected and svc.can_edit_euc(role, username, selected):
+            with st.expander("Edit selected EUC Inventory record on this page"):
+                with st.form(f"inventory_edit_{selected['euc_id']}"):
+                    c1, c2, c3 = st.columns(3)
+                    name = c1.text_input("EUC Application Name", value=selected.get("name") or "")
+                    legal_entity = c2.selectbox("Legal Entity", LEGAL_ENTITIES, index=option_index(LEGAL_ENTITIES, selected.get("legal_entity")))
+                    business_unit = c3.text_input("Business Unit", value=selected.get("business_unit") or "")
+                    owner_val = c1.text_input("Owner", value=selected.get("owner") or "")
+                    delegate = c2.text_input("Owner Delegate", value=selected.get("owner_delegate") or "")
+                    reviewer = c3.text_input("Reviewer", value=selected.get("reviewer") or "")
+                    purpose = st.text_area("Purpose", value=selected.get("purpose") or "")
+                    description = st.text_area("Description", value=selected.get("description") or "")
+                    c4, c5, c6 = st.columns(3)
+                    tech = c4.selectbox("Technology", TECHNOLOGY_TYPES, index=option_index(TECHNOLOGY_TYPES, selected.get("technology_type")))
+                    storage = c5.text_input("Storage location", value=selected.get("storage_location") or "")
+                    lifecycle = c6.selectbox("Lifecycle status", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, selected.get("lifecycle_status")))
+                    next_review = c4.date_input("Next review date", value=_date_value(selected.get("next_review_date")))
+                    spof = c5.selectbox("SPOF indicator", ["No", "Yes"], index=option_index(["No", "Yes"], selected.get("spof_indicator") or "No"))
+                    overall = c6.selectbox("Overall status", OVERALL_STATUSES, index=option_index(OVERALL_STATUSES, selected.get("overall_status")))
+                    mapping = st.text_area("BCBS 239 output mapping", value=selected.get("bcbs239_output_mapping") or "")
+                    if st.form_submit_button("Save selected EUC"):
+                        payload = dict(selected)
+                        payload.update({
+                            "name": name,
+                            "legal_entity": legal_entity,
+                            "business_unit": business_unit,
+                            "owner": owner_val,
+                            "owner_delegate": delegate,
+                            "reviewer": reviewer,
+                            "purpose": purpose,
+                            "description": description,
+                            "technology_type": tech,
+                            "storage_location": storage,
+                            "lifecycle_status": lifecycle,
+                            "overall_status": overall,
+                            "next_review_date": next_review.isoformat() if next_review else None,
+                            "spof_indicator": spof,
+                            "bcbs239_output_mapping": mapping,
+                        })
+                        try:
+                            svc.update_euc(int(selected["euc_id"]), payload, username)
+                            st.success("Selected EUC updated.")
+                            rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
+        elif selected:
+            st.info("You can view this EUC but cannot edit it in the current user context.")
 
 
 def page_register() -> None:
@@ -673,6 +746,21 @@ def page_detail() -> None:
         reviews_tab = svc.get_reviews(euc["euc_id"])
         safe_df(reviews_tab)
         delete_record_panel("Review", reviews_tab, "review_id", ["review_type", "outcome", "reviewer"], key="detail_review")
+        if not reviews_tab.empty and role in {svc.DVU_ROLE, svc.GCC_ROLE, svc.ADMIN_ROLE}:
+            st.subheader("Edit selected review / add clarification")
+            review_map = {f"{int(row['review_id'])} — {row['review_type']} — {row['outcome']} — {row['reviewer']}": int(row["review_id"]) for _, row in reviews_tab.iterrows()}
+            chosen_review = st.selectbox("Review record", list(review_map.keys()))
+            selected_review = reviews_tab[reviews_tab["review_id"].astype(int) == int(review_map[chosen_review])].iloc[0].to_dict()
+            with st.form(f"edit_review_{selected_review['review_id']}"):
+                c1, c2, c3 = st.columns(3)
+                review_type = c1.selectbox("Review type", REVIEW_TYPES, index=option_index(REVIEW_TYPES, selected_review.get("review_type")))
+                outcome = c2.selectbox("Outcome", REVIEW_OUTCOMES, index=option_index(REVIEW_OUTCOMES, selected_review.get("outcome")))
+                review_date = c3.date_input("Review date", value=_date_value(selected_review.get("review_date")))
+                comments = st.text_area("Comments / clarification", value=selected_review.get("comments") or "")
+                if st.form_submit_button("Save selected review"):
+                    svc.update_review(int(selected_review["review_id"]), {"review_type": review_type, "outcome": outcome, "comments": comments, "review_date": review_date.isoformat()}, username)
+                    st.success("Review updated.")
+                    rerun()
     with tabs[8]:
         safe_df(svc.audit_trail({"entity_type": "EUC", "entity_id": euc["euc_id"]}), height=350)
 
@@ -840,11 +928,22 @@ def page_risk_assessment() -> None:
     visible_assessments = assessments[[c for c in display_cols if c in assessments.columns]] if not assessments.empty else assessments
     safe_df(visible_assessments, height=280)
     selected_assessment_id = st.session_state.get("selected_assessment_id")
-    if selected_assessment_id:
+    if not assessments.empty:
+        assessment_map = {
+            f"#{int(row['assessment_id'])} v{int(row['version'])} — {row['assessment_date']} — residual {row['residual_risk']}": int(row["assessment_id"])
+            for _, row in assessments.iterrows()
+        }
+        labels = list(assessment_map.keys())
+        default_index = 0
+        if selected_assessment_id and int(selected_assessment_id) in list(assessment_map.values()):
+            default_index = list(assessment_map.values()).index(int(selected_assessment_id))
+        chosen_assessment = st.selectbox("Select completed assessment for review / superseding reference", labels, index=default_index)
+        selected_assessment_id = assessment_map[chosen_assessment]
         selected_assessment = svc.get_risk_assessment(int(selected_assessment_id))
         if selected_assessment and int(selected_assessment.get("euc_id", 0)) == int(euc["euc_id"]):
-            with st.expander(f"Assessment review — #{selected_assessment_id}", expanded=True):
+            with st.expander(f"Assessment review — #{selected_assessment_id}", expanded=False):
                 render_risk_assessment_review(selected_assessment)
+            st.caption("Completed assessments are not overwritten. To amend one, submit a new assessment below; it will be stored as the next version.")
     delete_record_panel("Risk Assessment", assessments, "assessment_id", ["version", "assessment_date", "inherent_risk", "residual_risk"], key="risk_assessment")
     if not svc.can_edit_euc(role, username, euc) and role not in {svc.ADMIN_ROLE, svc.GCC_ROLE}:
         st.warning("Only the EUC owner/delegate or governance roles can record assessments.")
@@ -1013,9 +1112,8 @@ def page_documents() -> None:
     delete_record_panel("Document", docs, "document_id", ["document_type", "file_name", "status"], key="documents_document")
     st.caption("Upload only the evidence type and file. Status is assigned automatically as Submitted, then updated by GCC/Data Validation review. Risk Assessment comes from the Risk Assessment module.")
 
-    col_upload, col_review = st.columns(2)
-    with col_upload:
-        st.subheader("Upload evidence")
+    tabs = st.tabs(["Upload evidence", "Edit / review selected evidence"])
+    with tabs[0]:
         if svc.can_upload_evidence(role, username, euc) and require_write_access():
             uploaded = st.file_uploader("Upload document / evidence")
             with st.form("doc_metadata"):
@@ -1044,21 +1142,48 @@ def page_documents() -> None:
         else:
             st.info("Upload is disabled for the current role/EUC relationship.")
 
-    with col_review:
-        st.subheader("Review evidence")
-        if svc.can_review(role) and require_write_access() and not docs.empty:
-            doc_map = {f"{row['document_id']} — {row['document_type']} — {row['status']}": int(row["document_id"]) for _, row in docs.iterrows()}
-            chosen = st.selectbox("Document", list(doc_map.keys()))
-            with st.form("review_doc"):
-                status = st.selectbox("Review status", ["Accepted", "Rejected", "Expired", "Superseded", "Submitted"])
-                deficiency = st.text_input("Deficiency tag", placeholder="e.g., missing sign-off, expired evidence")
-                comments = st.text_area("Review comments")
-                if st.form_submit_button("Record review"):
-                    svc.review_document(doc_map[chosen], status, comments, deficiency, username)
-                    st.success("Document review recorded and checklist recalculated.")
-                    rerun()
+    with tabs[1]:
+        if docs.empty:
+            st.info("No uploaded evidence exists for this EUC.")
         else:
-            st.info("Evidence review is available to GCC, Data Validation, and Administrator roles.")
+            doc_map = {f"{int(row['document_id'])} — {row['document_type']} — {row['file_name']} — {row['status']}": int(row["document_id"]) for _, row in docs.iterrows()}
+            chosen = st.selectbox("Evidence record", list(doc_map.keys()))
+            selected = docs[docs["document_id"].astype(int) == int(doc_map[chosen])].iloc[0].to_dict()
+            can_meta_edit = svc.can_upload_evidence(role, username, euc) and (selected.get("status") not in {"Accepted"} or role in {svc.GCC_ROLE, svc.ADMIN_ROLE})
+            can_review_doc = svc.can_review(role)
+            if not (can_meta_edit or can_review_doc) or svc.is_read_only(role):
+                st.info("You can view this evidence record but cannot update it in the current role.")
+                st.json({k: selected.get(k) for k in doc_cols if k in selected})
+            else:
+                with st.form(f"edit_doc_{selected['document_id']}"):
+                    uploadable_document_types = [doc_type for doc_type in DOCUMENT_TYPES if doc_type != "Risk Assessment"]
+                    document_type = st.selectbox(
+                        "Document type",
+                        uploadable_document_types,
+                        index=option_index(uploadable_document_types, selected.get("document_type")),
+                        disabled=not can_meta_edit,
+                    )
+                    comments = st.text_area("Comments", value=selected.get("comments") or "", disabled=not (can_meta_edit or can_review_doc))
+                    deficiency = st.text_input("Deficiency tag", value=selected.get("deficiency_tag") or "", disabled=not can_review_doc)
+                    status = st.selectbox(
+                        "Status",
+                        ["Submitted", "Accepted", "Rejected", "Expired", "Superseded"],
+                        index=option_index(["Submitted", "Accepted", "Rejected", "Expired", "Superseded"], selected.get("status")),
+                        disabled=not can_review_doc,
+                    )
+                    st.caption(f"File: {selected.get('file_name')} · Uploaded by {selected.get('uploaded_by')} on {selected.get('uploaded_at')}")
+                    if st.form_submit_button("Save selected evidence record"):
+                        try:
+                            svc.update_document_metadata(
+                                int(selected["document_id"]),
+                                {"document_type": document_type, "comments": comments, "deficiency_tag": deficiency, "status": status},
+                                username,
+                                review_update=can_review_doc,
+                            )
+                            st.success("Evidence record updated and checklist recalculated.")
+                            rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
 
 
 def page_checklist() -> None:
@@ -1085,7 +1210,7 @@ def page_checklist() -> None:
 def page_tasks() -> None:
     st.title("Tasks & Remediation")
     username, role = current_user()
-    st.caption("Select an EUC first. The task table is then filtered to the selected EUC and the current role/user visibility.")
+    st.caption("Select an EUC first. The task table is filtered to the selected EUC and current user/role visibility.")
     euc = euc_selector("Select EUC for task review")
     if not euc:
         return
@@ -1102,17 +1227,56 @@ def page_tasks() -> None:
     delete_record_panel("Task", tasks, "task_id", ["task_type", "title", "status"], key="tasks_task")
     if tasks.empty or svc.is_read_only(role):
         return
-    st.subheader("Update selected EUC task")
-    task_map = {f"{int(row['task_id'])} — {row['title']}": int(row["task_id"]) for _, row in tasks.iterrows()}
+
+    st.subheader("Select and edit task")
+    task_map = {f"{int(row['task_id'])} — {row['title']} — {row['status']}": int(row["task_id"]) for _, row in tasks.iterrows()}
     chosen = st.selectbox("Task", list(task_map.keys()))
-    with st.form("update_task"):
-        status = st.selectbox("Status", TASK_STATUSES)
-        evidence_id = st.number_input("Closure evidence document ID", min_value=0, value=0, step=1)
-        reason = st.text_area("Closure reason / response")
-        if st.form_submit_button("Update task"):
-            svc.update_task(task_map[chosen], status, reason, int(evidence_id) or None, username)
-            st.success("Task updated.")
-            rerun()
+    selected = svc.get_task(task_map[chosen])
+    if not selected:
+        st.warning("The selected task no longer exists.")
+        return
+    governance_editor = role in {svc.GCC_ROLE, svc.DVU_ROLE, svc.ADMIN_ROLE}
+    assigned_editor = selected.get("assigned_to") == username or selected.get("assigned_role") == role
+    owner_editor = svc.can_edit_euc(role, username, euc)
+    if not (governance_editor or assigned_editor or owner_editor):
+        st.info("You can view this task but cannot edit it in the current user context.")
+        return
+
+    with st.form(f"edit_task_{selected['task_id']}"):
+        c1, c2, c3 = st.columns(3)
+        task_type = c1.selectbox("Task type", TASK_TYPES, index=option_index(TASK_TYPES, selected.get("task_type")), disabled=not governance_editor)
+        priority = c2.selectbox("Priority", PRIORITIES, index=option_index(PRIORITIES, selected.get("priority")), disabled=not governance_editor)
+        status = c3.selectbox("Status", TASK_STATUSES, index=option_index(TASK_STATUSES, selected.get("status")))
+        title = st.text_input("Title", value=selected.get("title") or "", disabled=not governance_editor)
+        description = st.text_area("Description", value=selected.get("description") or "", disabled=not governance_editor)
+        c4, c5, c6 = st.columns(3)
+        users = user_select_options(include_blank=True)
+        if selected.get("assigned_to") and selected.get("assigned_to") not in users:
+            users.append(selected.get("assigned_to"))
+        assigned_to = c4.selectbox("Assigned user", users, index=option_index(users, selected.get("assigned_to"), 0), disabled=not governance_editor)
+        assigned_role = c5.selectbox("Assigned role", ROLES, index=option_index(ROLES, selected.get("assigned_role")), disabled=not governance_editor)
+        due_date = c6.date_input("Due date", value=_date_value(selected.get("due_date")), disabled=not governance_editor)
+        evidence_id = st.number_input("Closure evidence document ID", min_value=0, value=int(selected.get("closure_evidence_document_id") or 0), step=1)
+        reason = st.text_area("Closure reason / response", value=selected.get("closure_reason") or "")
+        if st.form_submit_button("Save selected task"):
+            payload = {
+                "task_type": task_type,
+                "title": title,
+                "description": description,
+                "assigned_to": assigned_to or None,
+                "assigned_role": assigned_role,
+                "due_date": due_date.isoformat() if due_date else None,
+                "status": status,
+                "priority": priority,
+                "closure_reason": reason,
+                "closure_evidence_document_id": int(evidence_id) or None,
+            }
+            try:
+                svc.update_task_full(int(selected["task_id"]), payload, username)
+                st.success("Task updated.")
+                rerun()
+            except ValueError as exc:
+                st.error(str(exc))
 
 
 def page_dvu_queue() -> None:
@@ -1172,7 +1336,7 @@ def page_findings() -> None:
     delete_record_panel("Finding", findings, "finding_id", ["reference_id", "severity", "status"], key="findings_finding")
     if svc.is_read_only(role):
         return
-    tabs = st.tabs(["Raise finding", "Update finding"])
+    tabs = st.tabs(["Raise finding", "Edit selected finding"])
     with tabs[0]:
         if role not in {svc.DVU_ROLE, svc.GCC_ROLE, svc.ADMIN_ROLE}:
             st.info("Only Data Validation, GCC, and Administrator roles can raise findings.")
@@ -1185,7 +1349,10 @@ def page_findings() -> None:
                     control_area = st.selectbox("Control area", CONTROL_AREAS)
                     description = st.text_area("Finding description *")
                     remediation = st.text_area("Remediation required")
-                    assigned_to = st.text_input("Assigned owner", value=euc.get("owner") or "")
+                    users = user_select_options(include_blank=True)
+                    if euc.get("owner") and euc.get("owner") not in users:
+                        users.append(euc.get("owner"))
+                    assigned_to = st.selectbox("Assigned owner", users, index=option_index(users, euc.get("owner"), 0))
                     due = st.date_input("Due date", value=date.today() + timedelta(days=30))
                     if st.form_submit_button("Create finding"):
                         if not description:
@@ -1198,18 +1365,54 @@ def page_findings() -> None:
         if findings.empty:
             st.info("No findings to update.")
         else:
-            finding_map = {f"{row['finding_id']} — {row['reference_id']} — {row['severity']} — {row['status']}": int(row["finding_id"]) for _, row in findings.iterrows()}
+            finding_map = {f"{int(row['finding_id'])} — {row['reference_id']} — {row['severity']} — {row['status']}": int(row["finding_id"]) for _, row in findings.iterrows()}
             chosen = st.selectbox("Finding", list(finding_map.keys()))
-            with st.form("update_finding"):
-                status = st.selectbox("Status", ["Open", "In Progress", "Closure Requested", "Closed", "Cancelled"])
-                comments = st.text_area("Closure / validation comments")
-                if st.form_submit_button("Update finding"):
-                    if status == "Closed" and role not in {svc.DVU_ROLE, svc.GCC_ROLE, svc.ADMIN_ROLE}:
+            selected = findings[findings["finding_id"].astype(int) == int(finding_map[chosen])].iloc[0].to_dict()
+            euc = svc.get_euc(int(selected["euc_id"]))
+            governance_editor = role in {svc.DVU_ROLE, svc.GCC_ROLE, svc.ADMIN_ROLE}
+            owner_editor = svc.can_edit_euc(role, username, euc)
+            if not (governance_editor or owner_editor):
+                st.info("You can view this finding but cannot update it in the current role.")
+                return
+            with st.form(f"edit_finding_{selected['finding_id']}"):
+                c1, c2, c3 = st.columns(3)
+                severity = c1.selectbox("Severity", FINDING_SEVERITIES, index=option_index(FINDING_SEVERITIES, selected.get("severity")), disabled=not governance_editor)
+                control_area = c2.selectbox("Control area", CONTROL_AREAS, index=option_index(CONTROL_AREAS, selected.get("control_area")), disabled=not governance_editor)
+                status = c3.selectbox("Status", ["Open", "In Progress", "Closure Requested", "Closed", "Cancelled"], index=option_index(["Open", "In Progress", "Closure Requested", "Closed", "Cancelled"], selected.get("status")))
+                requirement = st.text_input("Requirement", value=selected.get("requirement") or "", disabled=not governance_editor)
+                description = st.text_area("Finding description", value=selected.get("finding_description") or "", disabled=not governance_editor)
+                remediation = st.text_area("Remediation required / owner response", value=selected.get("remediation_required") or "", disabled=not (governance_editor or owner_editor))
+                c4, c5 = st.columns(2)
+                users = user_select_options(include_blank=True)
+                if selected.get("assigned_to") and selected.get("assigned_to") not in users:
+                    users.append(selected.get("assigned_to"))
+                assigned_to = c4.selectbox("Assigned to", users, index=option_index(users, selected.get("assigned_to"), 0), disabled=not governance_editor)
+                due = c5.date_input("Due date", value=_date_value(selected.get("due_date")), disabled=not governance_editor)
+                closure_comments = st.text_area("Closure / validation comments", value=selected.get("closure_comments") or "")
+                if st.form_submit_button("Save selected finding"):
+                    if status == "Closed" and not governance_editor:
                         st.error("Closure validation is restricted to Data Validation, GCC, or Administrator roles.")
                     else:
-                        svc.update_finding(finding_map[chosen], status, comments, username)
-                        st.success("Finding updated.")
-                        rerun()
+                        try:
+                            svc.update_finding_full(
+                                int(selected["finding_id"]),
+                                {
+                                    "severity": severity,
+                                    "requirement": requirement,
+                                    "control_area": control_area,
+                                    "finding_description": description,
+                                    "remediation_required": remediation,
+                                    "assigned_to": assigned_to or None,
+                                    "due_date": due.isoformat() if due else None,
+                                    "status": status,
+                                    "closure_comments": closure_comments,
+                                },
+                                username,
+                            )
+                            st.success("Finding updated.")
+                            rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
 
 
 def page_exceptions() -> None:
@@ -1220,7 +1423,7 @@ def page_exceptions() -> None:
     delete_record_panel("Exception", exceptions, "exception_id", ["reference_id", "approval_status", "status"], key="exceptions_exception")
     if svc.is_read_only(role):
         return
-    tabs = st.tabs(["Create exception", "Approve / reject"])
+    tabs = st.tabs(["Create exception", "Edit selected exception", "Approve / reject"])
     with tabs[0]:
         euc = euc_selector("Exception EUC")
         if euc and (svc.can_edit_euc(role, username, euc) or role in {svc.GCC_ROLE, svc.ADMIN_ROLE}):
@@ -1242,6 +1445,57 @@ def page_exceptions() -> None:
         else:
             st.info("Select an EUC for which you have exception creation access.")
     with tabs[1]:
+        if exceptions.empty:
+            st.info("No exceptions available.")
+        else:
+            ex_map = {f"{int(row['exception_id'])} — {row['reference_id']} — {row['approval_status']} — {row['status']}": int(row["exception_id"]) for _, row in exceptions.iterrows()}
+            chosen = st.selectbox("Exception to edit", list(ex_map.keys()))
+            selected = exceptions[exceptions["exception_id"].astype(int) == int(ex_map[chosen])].iloc[0].to_dict()
+            euc = svc.get_euc(int(selected["euc_id"]))
+            governance_editor = role in {svc.GCC_ROLE, svc.ADMIN_ROLE}
+            owner_editor = svc.can_edit_euc(role, username, euc)
+            approver_editor = svc.can_approve(role)
+            if not (governance_editor or owner_editor or approver_editor):
+                st.info("You can view this exception but cannot update it in the current role.")
+            else:
+                with st.form(f"edit_exception_{selected['exception_id']}"):
+                    gap = st.text_area("Control gap", value=selected.get("control_gap") or "", disabled=not (governance_editor or owner_editor))
+                    root = st.text_area("Root cause", value=selected.get("root_cause") or "", disabled=not (governance_editor or owner_editor))
+                    comp = st.text_area("Compensating controls", value=selected.get("compensating_controls") or "", disabled=not (governance_editor or owner_editor))
+                    remediation = st.text_area("Remediation plan", value=selected.get("remediation_plan") or "", disabled=not (governance_editor or owner_editor))
+                    c1, c2, c3 = st.columns(3)
+                    residual = c1.selectbox("Residual risk", RISK_LEVELS, index=option_index(RISK_LEVELS, selected.get("residual_risk")), disabled=not governance_editor)
+                    target = c2.date_input("Target date", value=_date_value(selected.get("target_date")), disabled=not (governance_editor or owner_editor))
+                    expiry = c3.date_input("Expiry date", value=_date_value(selected.get("expiry_date")), disabled=not (governance_editor or approver_editor))
+                    c4, c5, c6 = st.columns(3)
+                    approval_status = c4.selectbox("Approval status", APPROVAL_STATUSES, index=option_index(APPROVAL_STATUSES, selected.get("approval_status")), disabled=not approver_editor)
+                    status_options = ["Open", "Approved", "Rejected", "Closure Requested", "Closed", "Withdrawn", "Expired"]
+                    status = c5.selectbox("Exception status", status_options, index=option_index(status_options, selected.get("status")), disabled=not (governance_editor or approver_editor or owner_editor))
+                    evidence_id = c6.number_input("Closure evidence document ID", min_value=0, value=int(selected.get("closure_evidence_document_id") or 0), step=1)
+                    if st.form_submit_button("Save selected exception"):
+                        try:
+                            svc.update_exception_full(
+                                int(selected["exception_id"]),
+                                {
+                                    "control_gap": gap,
+                                    "root_cause": root,
+                                    "compensating_controls": comp,
+                                    "residual_risk": residual,
+                                    "remediation_plan": remediation,
+                                    "target_date": target.isoformat() if target else None,
+                                    "expiry_date": expiry.isoformat() if expiry else None,
+                                    "approval_status": approval_status,
+                                    "approved_by": username if approval_status in {"Approved", "Rejected"} else selected.get("approved_by"),
+                                    "status": status,
+                                    "closure_evidence_document_id": int(evidence_id) or None,
+                                },
+                                username,
+                            )
+                            st.success("Exception updated.")
+                            rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
+    with tabs[2]:
         if not svc.can_approve(role):
             st.info("Exception approval is restricted to Approver / Head of Unit and Administrator roles.")
         elif exceptions.empty:
@@ -1264,25 +1518,52 @@ def page_incidents() -> None:
     delete_record_panel("Incident", incidents, "incident_id", ["reference_id", "incident_date", "status"], key="incidents_incident")
     if svc.is_read_only(role):
         return
-    euc = euc_selector("Incident EUC")
-    if not euc:
-        return
-    if not svc.can_edit_euc(role, username, euc) and role not in {svc.GCC_ROLE, svc.ADMIN_ROLE}:
-        st.info("Incident creation is available to EUC owners/delegates and governance roles.")
-        return
-    with st.form("create_incident"):
-        affected = st.text_area("Affected outputs")
-        incident_date = st.date_input("Incident date", value=date.today())
-        impact = st.text_area("Impact summary")
-        containment = st.text_input("Containment status")
-        correction = st.text_input("Correction status")
-        rca = st.text_input("RCA status")
-        remediation = st.text_area("Remediation actions")
-        status = st.selectbox("Status", INCIDENT_STATUSES)
-        if st.form_submit_button("Create incident"):
-            svc.create_incident({"euc_id": euc["euc_id"], "affected_outputs": affected, "incident_date": incident_date.isoformat(), "impact_summary": impact, "containment_status": containment, "correction_status": correction, "rca_status": rca, "remediation_actions": remediation, "status": status}, username)
-            st.success("Incident recorded. Reassessment and documentation refresh tasks were generated.")
-            rerun()
+    tabs = st.tabs(["Create incident", "Edit selected incident"])
+    with tabs[0]:
+        euc = euc_selector("Incident EUC")
+        if not euc:
+            return
+        if not svc.can_edit_euc(role, username, euc) and role not in {svc.GCC_ROLE, svc.ADMIN_ROLE}:
+            st.info("Incident creation is available to EUC owners/delegates and governance roles.")
+        else:
+            with st.form("create_incident"):
+                affected = st.text_area("Affected outputs")
+                incident_date = st.date_input("Incident date", value=date.today())
+                impact = st.text_area("Impact summary")
+                containment = st.text_input("Containment status")
+                correction = st.text_input("Correction status")
+                rca = st.text_input("RCA status")
+                remediation = st.text_area("Remediation actions")
+                status = st.selectbox("Status", INCIDENT_STATUSES)
+                if st.form_submit_button("Create incident"):
+                    svc.create_incident({"euc_id": euc["euc_id"], "affected_outputs": affected, "incident_date": incident_date.isoformat(), "impact_summary": impact, "containment_status": containment, "correction_status": correction, "rca_status": rca, "remediation_actions": remediation, "status": status}, username)
+                    st.success("Incident recorded. Reassessment and documentation refresh tasks were generated.")
+                    rerun()
+    with tabs[1]:
+        if incidents.empty:
+            st.info("No incidents available.")
+        else:
+            inc_map = {f"{int(row['incident_id'])} — {row['reference_id']} — {row['incident_date']} — {row['status']}": int(row["incident_id"]) for _, row in incidents.iterrows()}
+            chosen = st.selectbox("Incident to edit", list(inc_map.keys()))
+            selected = incidents[incidents["incident_id"].astype(int) == int(inc_map[chosen])].iloc[0].to_dict()
+            euc = svc.get_euc(int(selected["euc_id"]))
+            if not can_edit_operational_record(role, username, euc, {svc.GCC_ROLE, svc.ADMIN_ROLE}):
+                st.info("You can view this incident but cannot update it in the current role.")
+            else:
+                with st.form(f"edit_incident_{selected['incident_id']}"):
+                    affected = st.text_area("Affected outputs", value=selected.get("affected_outputs") or "")
+                    incident_date = st.date_input("Incident date", value=_date_value(selected.get("incident_date")))
+                    impact = st.text_area("Impact summary", value=selected.get("impact_summary") or "")
+                    c1, c2, c3 = st.columns(3)
+                    containment = c1.text_input("Containment status", value=selected.get("containment_status") or "")
+                    correction = c2.text_input("Correction status", value=selected.get("correction_status") or "")
+                    rca = c3.text_input("RCA status", value=selected.get("rca_status") or "")
+                    remediation = st.text_area("Remediation actions", value=selected.get("remediation_actions") or "")
+                    status = st.selectbox("Status", INCIDENT_STATUSES, index=option_index(INCIDENT_STATUSES, selected.get("status")))
+                    if st.form_submit_button("Save selected incident"):
+                        svc.update_incident(int(selected["incident_id"]), {"affected_outputs": affected, "incident_date": incident_date.isoformat(), "impact_summary": impact, "containment_status": containment, "correction_status": correction, "rca_status": rca, "remediation_actions": remediation, "status": status}, username)
+                        st.success("Incident updated.")
+                        rerun()
 
 
 def page_material_changes() -> None:
@@ -1293,26 +1574,55 @@ def page_material_changes() -> None:
     delete_record_panel("Material Change", changes, "change_id", ["reference_id", "change_type", "status"], key="changes_change")
     if svc.is_read_only(role):
         return
-    euc = euc_selector("Changed EUC")
-    if not euc:
-        return
-    if not svc.can_edit_euc(role, username, euc) and role not in {svc.GCC_ROLE, svc.ADMIN_ROLE}:
-        st.info("Material change creation is available to EUC owners/delegates and governance roles.")
-        return
-    with st.form("material_change"):
-        change_type = st.selectbox("Change type", CHANGE_TYPES)
-        description = st.text_area("Description *")
-        impact = st.text_area("Impact assessment")
-        reassessment = st.checkbox("Reassessment required", value=True)
-        doc_refresh = st.checkbox("Documentation refresh required", value=True)
-        status = st.selectbox("Status", ["Open", "In Assessment", "Awaiting Reassessment", "Closed"])
-        if st.form_submit_button("Record material change"):
-            if not description:
-                st.error("Description is required.")
+    tabs = st.tabs(["Record material change", "Edit selected material change"])
+    with tabs[0]:
+        euc = euc_selector("Changed EUC")
+        if not euc:
+            return
+        if not svc.can_edit_euc(role, username, euc) and role not in {svc.GCC_ROLE, svc.ADMIN_ROLE}:
+            st.info("Material change creation is available to EUC owners/delegates and governance roles.")
+        else:
+            with st.form("material_change"):
+                change_type = st.selectbox("Change type", CHANGE_TYPES)
+                description = st.text_area("Description *")
+                impact = st.text_area("Impact assessment")
+                reassessment = st.checkbox("Reassessment required", value=True)
+                doc_refresh = st.checkbox("Documentation refresh required", value=True)
+                status = st.selectbox("Status", ["Open", "In Assessment", "Awaiting Reassessment", "Closed"])
+                if st.form_submit_button("Record material change"):
+                    if not description:
+                        st.error("Description is required.")
+                    else:
+                        svc.create_material_change({"euc_id": euc["euc_id"], "change_type": change_type, "description": description, "impact_assessment": impact, "reassessment_required": reassessment, "documentation_refresh_required": doc_refresh, "status": status}, username)
+                        st.success("Material change recorded and follow-up tasks generated as applicable.")
+                        rerun()
+    with tabs[1]:
+        if changes.empty:
+            st.info("No material changes available.")
+        else:
+            ch_map = {f"{int(row['change_id'])} — {row['reference_id']} — {row['change_type']} — {row['status']}": int(row["change_id"]) for _, row in changes.iterrows()}
+            chosen = st.selectbox("Material change to edit", list(ch_map.keys()))
+            selected = changes[changes["change_id"].astype(int) == int(ch_map[chosen])].iloc[0].to_dict()
+            euc = svc.get_euc(int(selected["euc_id"]))
+            if not can_edit_operational_record(role, username, euc, {svc.GCC_ROLE, svc.ADMIN_ROLE}):
+                st.info("You can view this material change but cannot update it in the current role.")
             else:
-                svc.create_material_change({"euc_id": euc["euc_id"], "change_type": change_type, "description": description, "impact_assessment": impact, "reassessment_required": reassessment, "documentation_refresh_required": doc_refresh, "status": status}, username)
-                st.success("Material change recorded and follow-up tasks generated as applicable.")
-                rerun()
+                with st.form(f"edit_change_{selected['change_id']}"):
+                    c1, c2, c3 = st.columns(3)
+                    change_type = c1.selectbox("Change type", CHANGE_TYPES, index=option_index(CHANGE_TYPES, selected.get("change_type")))
+                    reassessment = c2.checkbox("Reassessment required", value=bool(int(selected.get("reassessment_required") or 0)))
+                    doc_refresh = c3.checkbox("Documentation refresh required", value=bool(int(selected.get("documentation_refresh_required") or 0)))
+                    description = st.text_area("Description", value=selected.get("description") or "")
+                    impact = st.text_area("Impact assessment", value=selected.get("impact_assessment") or "")
+                    status_options = ["Open", "In Assessment", "Awaiting Reassessment", "Closed"]
+                    status = st.selectbox("Status", status_options, index=option_index(status_options, selected.get("status")))
+                    if st.form_submit_button("Save selected material change"):
+                        try:
+                            svc.update_material_change(int(selected["change_id"]), {"change_type": change_type, "description": description, "impact_assessment": impact, "reassessment_required": reassessment, "documentation_refresh_required": doc_refresh, "status": status}, username)
+                            st.success("Material change updated.")
+                            rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
 
 
 def page_lifecycle() -> None:
@@ -1330,8 +1640,21 @@ def page_lifecycle() -> None:
     if not svc.can_edit_euc(role, username, euc) and role not in {svc.GCC_ROLE, svc.ADMIN_ROLE}:
         st.info("Lifecycle changes are available to EUC owners/delegates and governance roles.")
         return
-    tabs = st.tabs(["Mark industrialization candidate", "Controlled decommissioning"])
+    tabs = st.tabs(["Edit lifecycle fields", "Mark industrialization candidate", "Controlled decommissioning"])
     with tabs[0]:
+        governance_editor = role in {svc.GCC_ROLE, svc.ADMIN_ROLE}
+        with st.form("edit_lifecycle_fields"):
+            lifecycle = st.selectbox("Lifecycle status", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, euc.get("lifecycle_status")), disabled=not governance_editor)
+            overall = st.selectbox("Overall status", OVERALL_STATUSES, index=option_index(OVERALL_STATUSES, euc.get("overall_status")), disabled=not governance_editor)
+            industrialization_rationale = st.text_area("Industrialization rationale", value=euc.get("industrialization_rationale") or "")
+            decommissioning_rationale = st.text_area("Decommissioning rationale", value=euc.get("decommissioning_rationale") or "")
+            if st.form_submit_button("Save lifecycle fields"):
+                payload = dict(euc)
+                payload.update({"lifecycle_status": lifecycle, "overall_status": overall, "industrialization_rationale": industrialization_rationale, "decommissioning_rationale": decommissioning_rationale})
+                svc.update_euc(euc["euc_id"], payload, username)
+                st.success("Lifecycle fields updated.")
+                rerun()
+    with tabs[1]:
         with st.form("industrialization"):
             rationale = st.text_area("Industrialization rationale", value=euc.get("industrialization_rationale") or "")
             if st.form_submit_button("Mark as industrialization candidate"):
@@ -1343,7 +1666,7 @@ def page_lifecycle() -> None:
                 svc.update_euc_status(euc["euc_id"], "Industrialization Candidate", username, "Industrialization candidate")
                 st.success("EUC marked as industrialization candidate.")
                 rerun()
-    with tabs[1]:
+    with tabs[2]:
         st.warning("Controlled decommissioning closes open obligations as cancelled/closed and retains final evidence records.")
         with st.form("decommission"):
             rationale = st.text_area("Decommissioning rationale", value=euc.get("decommissioning_rationale") or "")
@@ -1386,63 +1709,211 @@ def page_admin() -> None:
         return
     refs = svc.load_reference_data()
     tabs = st.tabs(["Reference data", "Required artifact rules", "User directory", "Due-date rules", "Seed/reset demo"])
+
     with tabs[0]:
-        category = st.selectbox("Category", ["document_type", "lifecycle_status", "risk_level", "control_area", "cacrt_dimension"])
-        st.write("Current values")
-        st.write(refs.get(category, []))
+        category_options = ["document_type", "lifecycle_status", "risk_level", "control_area", "cacrt_dimension"]
+        category = st.selectbox("Category", category_options)
         ref_df = svc.reference_data_table(category)
+        safe_df(ref_df, height=300)
         delete_record_panel("Reference Data", ref_df, "ref_id", ["category", "value"], key="admin_reference_data")
-        with st.form("add_ref"):
-            value = st.text_input("New reference value")
-            comments = st.text_area("Maker-checker comments")
-            if st.form_submit_button("Add reference value"):
-                if value.strip():
-                    svc.upsert_reference_value(category, value.strip(), username, comments)
-                    st.success("Reference value added.")
-                    rerun()
-                else:
-                    st.error("Value is required.")
+        ref_tabs = st.tabs(["Add value", "Edit selected value"])
+        with ref_tabs[0]:
+            with st.form("add_ref"):
+                value = st.text_input("New reference value")
+                comments = st.text_area("Maker-checker comments")
+                if st.form_submit_button("Add reference value"):
+                    if value.strip():
+                        svc.upsert_reference_value(category, value.strip(), username, comments)
+                        st.success("Reference value added.")
+                        rerun()
+                    else:
+                        st.error("Value is required.")
+        with ref_tabs[1]:
+            if ref_df.empty:
+                st.info("No reference data values exist for this category.")
+            else:
+                ref_map = {f"{int(row['ref_id'])} — {row['category']} — {row['value']}": int(row["ref_id"]) for _, row in ref_df.iterrows()}
+                chosen = st.selectbox("Reference row", list(ref_map.keys()))
+                selected = ref_df[ref_df["ref_id"].astype(int) == int(ref_map[chosen])].iloc[0].to_dict()
+                with st.form(f"edit_ref_{selected['ref_id']}"):
+                    edit_category = st.selectbox("Category", category_options, index=option_index(category_options, selected.get("category")))
+                    value = st.text_input("Value", value=selected.get("value") or "")
+                    active = st.checkbox("Active", value=bool(int(selected.get("active_flag") or 0)))
+                    approval_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=option_index(APPROVAL_STATUSES, selected.get("approval_status")))
+                    comments = st.text_area("Maker-checker comments", value=selected.get("maker_checker_comments") or "")
+                    if st.form_submit_button("Save selected reference value"):
+                        try:
+                            svc.update_reference_value(int(selected["ref_id"]), {"category": edit_category, "value": value.strip(), "active_flag": active, "maker_checker_comments": comments, "approval_status": approval_status, "approved_by": username if approval_status == "Approved" else selected.get("approved_by")}, username)
+                            st.success("Reference value updated.")
+                            rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
+
     with tabs[1]:
         rules_df = svc.required_rules_table()
         safe_df(rules_df, height=320)
         delete_record_panel("Required Artifact Rule", rules_df, "rule_id", ["risk_level", "required_document_type"], key="admin_rule")
-        with st.form("add_rule"):
-            c1, c2, c3 = st.columns(3)
-            risk = c1.selectbox("Risk level", RISK_LEVELS)
-            lifecycle = c2.selectbox("Lifecycle stage", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, "Active"))
-            doc_type = c3.selectbox("Required document type", DOCUMENT_TYPES)
-            control = c1.selectbox("Control area", CONTROL_AREAS)
-            cacrt = c2.selectbox("CACRT dimension", CACRT_DIMENSIONS)
-            mandatory = c3.checkbox("Mandatory", value=True)
-            comments = st.text_area("Maker-checker comments")
-            if st.form_submit_button("Create required artifact rule"):
-                svc.upsert_required_rule({"risk_level": risk, "lifecycle_stage": lifecycle, "required_document_type": doc_type, "control_area": control, "cacrt_dimension": cacrt, "mandatory_flag": mandatory, "maker_checker_comments": comments}, username)
-                st.success("Rule created.")
-                rerun()
+        rule_tabs = st.tabs(["Create rule", "Edit selected rule"])
+        with rule_tabs[0]:
+            with st.form("add_rule"):
+                c1, c2, c3 = st.columns(3)
+                risk = c1.selectbox("Risk level", RISK_LEVELS)
+                lifecycle = c2.selectbox("Lifecycle stage", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, "Active"))
+                doc_type = c3.selectbox("Required document type", DOCUMENT_TYPES)
+                control = c1.selectbox("Control area", CONTROL_AREAS)
+                cacrt = c2.selectbox("CACRT dimension", CACRT_DIMENSIONS)
+                mandatory = c3.checkbox("Mandatory", value=True)
+                comments = st.text_area("Maker-checker comments")
+                if st.form_submit_button("Create required artifact rule"):
+                    svc.upsert_required_rule({"risk_level": risk, "lifecycle_stage": lifecycle, "required_document_type": doc_type, "control_area": control, "cacrt_dimension": cacrt, "mandatory_flag": mandatory, "maker_checker_comments": comments}, username)
+                    st.success("Rule created.")
+                    rerun()
+        with rule_tabs[1]:
+            if rules_df.empty:
+                st.info("No rules exist.")
+            else:
+                rule_map = {f"{int(row['rule_id'])} — {row['risk_level']} — {row['required_document_type']}": int(row["rule_id"]) for _, row in rules_df.iterrows()}
+                chosen = st.selectbox("Required artifact rule", list(rule_map.keys()))
+                selected = rules_df[rules_df["rule_id"].astype(int) == int(rule_map[chosen])].iloc[0].to_dict()
+                with st.form(f"edit_rule_{selected['rule_id']}"):
+                    c1, c2, c3 = st.columns(3)
+                    risk = c1.selectbox("Risk level", RISK_LEVELS, index=option_index(RISK_LEVELS, selected.get("risk_level")))
+                    lifecycle = c2.selectbox("Lifecycle stage", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, selected.get("lifecycle_stage")))
+                    doc_type = c3.selectbox("Required document type", DOCUMENT_TYPES, index=option_index(DOCUMENT_TYPES, selected.get("required_document_type")))
+                    control = c1.selectbox("Control area", CONTROL_AREAS, index=option_index(CONTROL_AREAS, selected.get("control_area")))
+                    cacrt = c2.selectbox("CACRT dimension", CACRT_DIMENSIONS, index=option_index(CACRT_DIMENSIONS, selected.get("cacrt_dimension")))
+                    mandatory = c3.checkbox("Mandatory", value=bool(int(selected.get("mandatory_flag") or 0)))
+                    approval_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=option_index(APPROVAL_STATUSES, selected.get("approval_status")))
+                    comments = st.text_area("Maker-checker comments", value=selected.get("maker_checker_comments") or "")
+                    if st.form_submit_button("Save selected rule"):
+                        svc.update_required_rule(int(selected["rule_id"]), {"risk_level": risk, "lifecycle_stage": lifecycle, "required_document_type": doc_type, "control_area": control, "cacrt_dimension": cacrt, "mandatory_flag": mandatory, "maker_checker_comments": comments, "approval_status": approval_status, "approved_by": username if approval_status == "Approved" else selected.get("approved_by")}, username)
+                        st.success("Required artifact rule updated.")
+                        rerun()
+
     with tabs[2]:
         users = svc.user_directory(active_only=False)
         st.caption("This local directory maps task assignees to names and emails. It is intentionally separate from SSO for the MVP.")
-        safe_df(users, height=320)
+
+        selected_user_id = st.session_state.get("admin_selected_user_id")
+        if users is not None and not users.empty:
+            st.caption("Select one user row in the table to load it for editing below.")
+            event = st.dataframe(
+                users,
+                use_container_width=True,
+                hide_index=True,
+                height=320,
+                selection_mode="single-row",
+                on_select="rerun",
+                key="admin_user_directory_table",
+            )
+            try:
+                selected_rows = list(event.selection.rows)
+            except Exception:
+                selected_rows = []
+            if selected_rows:
+                selected_user_id = int(users.iloc[selected_rows[0]]["user_id"])
+                st.session_state["admin_selected_user_id"] = selected_user_id
+
+            if selected_user_id and selected_user_id not in set(users["user_id"].astype(int).tolist()):
+                st.session_state.pop("admin_selected_user_id", None)
+                selected_user_id = None
+        else:
+            st.info("No users exist yet. Create the first user profile below.")
+
         delete_record_panel("User Profile", users, "user_id", ["username", "email", "role"], key="admin_user_profile")
-        with st.form("upsert_user_profile"):
+
+        selected_user: dict[str, Any] | None = None
+        if users is not None and not users.empty and selected_user_id:
+            match = users[users["user_id"].astype(int) == int(selected_user_id)]
+            if not match.empty:
+                selected_user = match.iloc[0].to_dict()
+                st.info(f"Editing selected user: {selected_user.get('username')} · {selected_user.get('email')}")
+
+        c_new, c_clear = st.columns([1, 3])
+        if c_new.button("Create new user instead", disabled=selected_user is None):
+            st.session_state.pop("admin_selected_user_id", None)
+            rerun()
+        if c_clear.button("Clear table selection", disabled=selected_user is None):
+            st.session_state.pop("admin_selected_user_id", None)
+            rerun()
+
+        form_key = f"user_profile_form_{selected_user_id or 'new'}"
+        with st.form(form_key):
             c1, c2 = st.columns(2)
-            new_username = c1.text_input("Username *", placeholder="Firstname.Lastname")
-            full_name = c2.text_input("Full name *")
-            email = c1.text_input("Email *", placeholder="name@eurobank.gr")
-            user_role = c2.selectbox("Role *", ROLES)
-            active_flag = st.checkbox("Active", value=True)
-            if st.form_submit_button("Create / update user profile"):
+            default_username = str(selected_user.get("username", "")) if selected_user else ""
+            default_full_name = str(selected_user.get("full_name", "")) if selected_user else ""
+            default_email = str(selected_user.get("email", "")) if selected_user else ""
+            default_role = str(selected_user.get("role", ROLES[0])) if selected_user else ROLES[0]
+            default_active = bool(int(selected_user.get("active_flag", 1))) if selected_user else True
+
+            new_username = c1.text_input("Username *", value=default_username, placeholder="Firstname.Lastname")
+            full_name = c2.text_input("Full name *", value=default_full_name)
+            email = c1.text_input("Email *", value=default_email, placeholder="name@eurobank.gr")
+            user_role = c2.selectbox("Role *", ROLES, index=option_index(ROLES, default_role))
+            active_flag = st.checkbox("Active", value=default_active)
+            submit_label = "Save selected user profile" if selected_user else "Create user profile"
+            if st.form_submit_button(submit_label):
                 try:
-                    svc.upsert_user_profile({"username": new_username.strip(), "full_name": full_name.strip(), "email": email.strip(), "role": user_role, "active_flag": active_flag}, username)
+                    payload = {
+                        "username": new_username.strip(),
+                        "full_name": full_name.strip(),
+                        "email": email.strip(),
+                        "role": user_role,
+                        "active_flag": active_flag,
+                    }
+                    if selected_user:
+                        svc.update_user_profile(int(selected_user["user_id"]), payload, username)
+                    else:
+                        svc.upsert_user_profile(payload, username)
                     st.success("User profile saved.")
                     rerun()
                 except ValueError as exc:
                     st.error(str(exc))
+
     with tabs[3]:
         due_rules_df = svc.due_date_rules_table()
         safe_df(due_rules_df, height=360)
-        delete_record_panel("Due-date Rule", due_rules_df, "rule_id", ["task_type", "due_days"], key="admin_due_rule")
-        st.caption("Due-date rule editing is represented in the data model. The MVP uses default seeded rules for generated tasks.")
+        delete_record_panel("Due-date Rule", due_rules_df, "rule_id", ["task_type", "risk_level", "due_days"], key="admin_due_rule")
+        due_tabs = st.tabs(["Create due-date rule", "Edit selected due-date rule"])
+        with due_tabs[0]:
+            with st.form("create_due_rule"):
+                c1, c2, c3 = st.columns(3)
+                task_type = c1.selectbox("Task type", TASK_TYPES)
+                risk_level = c2.selectbox("Risk level", ["Any"] + RISK_LEVELS)
+                due_days = c3.number_input("Due days", min_value=0, value=10, step=1)
+                active = c1.checkbox("Active", value=True)
+                approval_status = c2.selectbox("Approval status", APPROVAL_STATUSES, index=option_index(APPROVAL_STATUSES, "Approved"))
+                comments = st.text_area("Maker-checker comments")
+                if st.form_submit_button("Create due-date rule"):
+                    try:
+                        svc.create_due_date_rule({"task_type": task_type, "risk_level": risk_level, "due_days": int(due_days), "active_flag": active, "maker_checker_comments": comments, "approval_status": approval_status}, username)
+                        st.success("Due-date rule created.")
+                        rerun()
+                    except Exception as exc:
+                        st.error(f"Could not create due-date rule: {exc}")
+        with due_tabs[1]:
+            if due_rules_df.empty:
+                st.info("No due-date rules exist.")
+            else:
+                due_map = {f"{int(row['rule_id'])} — {row['task_type']} — {row.get('risk_level') or 'Any'} — {row['due_days']} days": int(row["rule_id"]) for _, row in due_rules_df.iterrows()}
+                chosen = st.selectbox("Due-date rule", list(due_map.keys()))
+                selected = due_rules_df[due_rules_df["rule_id"].astype(int) == int(due_map[chosen])].iloc[0].to_dict()
+                with st.form(f"edit_due_rule_{selected['rule_id']}"):
+                    c1, c2, c3 = st.columns(3)
+                    task_type = c1.selectbox("Task type", TASK_TYPES, index=option_index(TASK_TYPES, selected.get("task_type")))
+                    risk_options = ["Any"] + RISK_LEVELS
+                    risk_level = c2.selectbox("Risk level", risk_options, index=option_index(risk_options, selected.get("risk_level") or "Any"))
+                    due_days = c3.number_input("Due days", min_value=0, value=int(selected.get("due_days") or 0), step=1)
+                    active = c1.checkbox("Active", value=bool(int(selected.get("active_flag") or 0)))
+                    approval_status = c2.selectbox("Approval status", APPROVAL_STATUSES, index=option_index(APPROVAL_STATUSES, selected.get("approval_status")))
+                    comments = st.text_area("Maker-checker comments", value=selected.get("maker_checker_comments") or "")
+                    if st.form_submit_button("Save selected due-date rule"):
+                        try:
+                            svc.update_due_date_rule(int(selected["rule_id"]), {"task_type": task_type, "risk_level": risk_level, "due_days": int(due_days), "active_flag": active, "maker_checker_comments": comments, "approval_status": approval_status, "approved_by": username if approval_status == "Approved" else selected.get("approved_by")}, username)
+                            st.success("Due-date rule updated.")
+                            rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
     with tabs[4]:
         st.warning("The app auto-seeds an empty local database for demo readiness. Use the command-line seed script for controlled resets.")
         if st.button("Run seed data loader", type="secondary"):
