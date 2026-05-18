@@ -28,22 +28,6 @@ This MVP is intentionally self-contained:
 └── uploads/                # Local evidence/document storage
 ```
 
-
-## Uploaded workbook alignment
-
-The current version was adjusted after reviewing the two uploaded workbooks:
-
-- `1. EUC Inventory.xlsm`
-  - `EUC Inventory` sheet: master EUC register fields.
-  - `EUC Asset Inventory` sheet: one-to-many asset/component rows belonging to a parent EUC.
-  - `LOV` sheet: reference values for legal entities, business units, technology types, storage types, input sources, SPOF, frequency, and automation level.
-- `2. EUC Risk_Assessement.xlsx`
-  - `Assessment` sheet: risk assessment form and formulas.
-  - `Lookups` sheet: risk levels, control statuses, assessment types, residual matrix, and EUC lookup data.
-  - `Dimensions & Risk Levels` sheet: definitions and guidance.
-
-The app does not require these Excel files at runtime; their rules and fields are represented in the SQLite schema, Streamlit forms, and `services.py` governance logic.
-
 ## Features
 
 ### Governance modules
@@ -86,17 +70,15 @@ The login is a demo scaffold only. It is isolated in the Streamlit session-state
 
 ### Governance logic implemented
 
-- Unique EUC reference generation using the workbook-style `EUC.001` convention
+- Unique EUC reference generation such as `EUC-000001`
 - Duplicate hints using name, owner, business unit, and storage location
 - BCBS 239 output mapping requirement
 - `Not Applicable` mapping justification check
-- Multiple EUC Asset Inventory rows for one logical EUC, linked through `euc_id`
-- Registration fields aligned to the uploaded EUC Inventory workbook, including Legal Entity, Reviewer, material report/KRI/model flags, active users, BU/COTS/SLA indicators, Library of Controls, and industrialization/decommissioning status
-- Risk assessment methodology aligned to the uploaded workbook: BCBS 239 materiality questions, Integrity / Accuracy and Timeliness / Availability dimensions, baseline control assessment, derived control effectiveness, residual-risk matrix, required action guidance, and full assessment history
-- Automatic inherent/residual risk update on assessment submission
+- Multiple components/assets for one logical EUC
+- Risk assessment scoring and full history
+- Automatic risk and residual risk update on assessment submission
 - Evidence upload to local `/uploads` storage
 - Evidence metadata: document type, requirement, control area, CACRT dimension, lifecycle stage, risk applicability, version, and status
-- Risk Assessment is not uploaded as evidence; the checklist uses the completed Risk Assessment record for the selected EUC
 - GCC/Data Validation evidence review with accept/reject/comment/deficiency tagging
 - Required artifact checklist based on residual risk
 - Automatic follow-up tasks for missing/rejected/expired mandatory artifacts
@@ -108,34 +90,18 @@ The login is a demo scaffold only. It is isolated in the Streamlit session-state
 - Industrialization candidate and controlled decommissioning flow
 - Dashboard cards, charts, reporting filters, and CSV export
 - Immutable audit trail viewer from the UI
-- Governed hard-delete actions for GCC and Group IT Governance Administrator, with retained DELETE audit-trail snapshots
 - Admin reference data and required artifact rule management, including maker-checker comment fields
 
-## Risk assessment methodology
+## Risk scoring rule
 
-The Risk Assessment page implements the logic from the uploaded `EUC Risk_Assessement.xlsx` workbook rather than the original five-slider MVP rule.
+The MVP applies the configurable scoring convention implemented in `services.py`:
 
-The assessment flow is:
+- Average score 1.0-1.9 = Low
+- Average score 2.0-2.9 = Medium
+- Average score 3.0-3.9 = High
+- Average score 4.0-5.0 = Very High
 
-1. Capture assessment metadata and assessment type: Periodic, Material Change, Incident-triggered, or Manual trigger.
-2. Capture three BCBS 239 materiality questions. If any answer is `Yes`, the EUC is treated as materially supporting a BCBS 239 in-scope output.
-3. Capture owner inherent levels for the two policy dimensions:
-   - Integrity / Accuracy
-   - Timeliness / Availability
-4. If the EUC materially supports BCBS 239, both inherent-risk dimensions are automatically forced to `Very High` and stored that way in the assessment history.
-5. Capture the eight baseline control areas:
-   - Registration & risk assessment
-   - Privileged Access
-   - Versioning & change log
-   - Checks & reconciliations
-   - EUC Library of Controls (CACRT)
-   - Operating Procedure
-   - Evidence & sign-off
-   - Resilience
-6. Derive control effectiveness as `Strong`, `Adequate`, `Weak`, or `Not in place` using the workbook rule.
-7. Apply the residual-risk matrix from the workbook to determine residual risk by dimension and overall residual risk. Material BCBS-supporting EUCs cannot fall below Medium residual risk.
-
-The older average-score helper remains only as a backwards-compatible fallback for legacy seed or migration payloads.
+Inherent risk is calculated from integrity/accuracy, timeliness/availability, complexity, and business criticality. Residual risk includes the control effectiveness score as the fifth score.
 
 ## Required artifact logic
 
@@ -148,11 +114,7 @@ Default mandatory evidence rules:
 | High | Risk Assessment, Operating Procedure, Library of Controls, Testing Evidence, Reconciliation Evidence, Review Evidence |
 | Very High | Risk Assessment, Operating Procedure, Library of Controls, Testing Evidence, Reconciliation Evidence, Resilience Evidence, Review Evidence, Approval Evidence |
 
-These rules are inserted into the `required_artifact_rules` table and can be extended from Admin Configuration. The `Risk Assessment` requirement is satisfied by the latest row in `risk_assessments`; users should not upload a separate Risk Assessment file in the Documents & Evidence Pack.
-
-## Governed deletion
-
-GCC and Group IT Governance Administrator roles can delete MVP records from the relevant list/detail pages. Deletes are hard deletes from the SQLite MVP tables, but every delete writes an immutable audit-trail entry containing the deleted row snapshot. EUC deletion explicitly removes dependent assets, assessments, documents, tasks, findings, reviews, exceptions, incidents, and material changes while retaining the audit trail.
+These rules are inserted into the `required_artifact_rules` table and can be extended from Admin Configuration.
 
 ## Local run
 
@@ -227,45 +189,6 @@ streamlit run app.py
 
 The app will recreate seed data on next launch.
 
-## Patch notes - Excel risk-assessment alignment
+## Dashboard visibility note
 
-This version implements the risk-assessment workbook logic more closely:
-
-- Owner inherent risk is captured separately from effective inherent risk.
-- Owner inherent risk input supports only Low, Medium, and High, matching the workbook input cells.
-- If any BCBS 239 materiality question is Yes, both effective inherent-risk dimensions are calculated as Very High.
-- Overall inherent risk is the higher of the effective Integrity / Accuracy and Timeliness / Availability inherent risks.
-- Control effectiveness is derived separately for each dimension using the workbook control subsets.
-- N/A is available only for EUC Library of Controls / CACRT and Evidence & sign-off.
-- Residual risk is calculated through the workbook residual-risk matrix.
-- Material BCBS 239 EUCs cannot have overall residual risk below Medium.
-- Documents & Evidence Pack no longer expects risk assessment uploads. Completed risk assessments appear as evidence links and can be opened for review from the evidence pack.
-
-## Patch notes - task, inventory, asset, and evidence-pack usability
-
-This version also includes the following workflow refinements:
-
-- EUC Inventory is row-filtered for EUC Owners and Contributors. GCC, Data Validation, Group IT Governance Administrator, and Internal Audit can view the full portfolio.
-- Tasks & Remediation now requires EUC selection first, then displays the task queue for that EUC.
-- Task tables include assignee full name and email, resolved from the local User Directory.
-- Admin Configuration includes a User Directory tab for maintaining usernames, full names, emails, roles, and active status.
-- Components / EUC Asset Inventory allows a user to select an asset row and edit the linked component record.
-- Documents & Evidence Pack uses a simplified evidence-upload form: document type, file, comments, and automatic initial status of Submitted.
-- The Required Artifact Checklist is embedded directly in the Documents & Evidence Pack page so users can see pending and completed artifacts before uploading evidence.
-
-## Patch 6 — record-level edit controls
-
-This version extends page-level maintenance so that operational records can be selected from tables and edited according to the MVP permission model:
-
-- EUC Inventory: select an EUC and edit the selected master record when permitted.
-- Risk Assessment: completed assessments are reviewable and amendments are handled by submitting a new version rather than overwriting history.
-- Documents & Evidence Pack: select uploaded evidence to update metadata/comments, and GCC/Data Validation/Admin can update review status and deficiencies.
-- Tasks & Remediation: select a task for the selected EUC and edit assignment, due date, priority, status, closure reason, and closure evidence depending on role.
-- Findings: select a finding and edit governance fields or owner response/closure request depending on role.
-- Exceptions: select an exception and edit exception details, approval/status fields, dates, and closure evidence according to role.
-- Incidents: select and update containment, correction, RCA, remediation, and status.
-- Material Changes: select and update change details, reassessment/documentation-refresh flags, impact assessment, and status.
-- Industrialization & Decommissioning: lifecycle status/rationale fields can be maintained from the lifecycle page.
-- Admin Configuration: reference data, required artifact rules, user profiles, and due-date rules can be selected from tables and edited.
-
-All update actions write an audit-trail record. Audit trail rows remain read-only in the UI.
+The Home / Dashboard page uses a personal scope. It shows EUCs, tasks, findings, exceptions, incidents, and charts relevant to the logged-in user context: owned EUCs, delegated EUCs, records created by the user, tasks assigned to the user, and role-queue tasks for centralized governance roles. Portfolio-wide monitoring remains available through the GCC Monitoring View and Reports & KPIs pages according to role permissions.

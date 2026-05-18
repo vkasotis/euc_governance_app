@@ -63,67 +63,17 @@ OVERALL_STATUSES = [
 RISK_LEVELS = ["Low", "Medium", "High", "Very High"]
 
 TECHNOLOGY_TYPES = [
-    "MS Excel",
-    "MS Access",
-    "VBA",
-    "Python",
+    "Excel",
+    "Access",
     "Python script",
     "Notebook",
-    "SQL Script",
-    "SQL script",
-    "SAS",
-    "Power BI",
-    "Databricks - Workbook",
-    "Database Tables",
     "Report",
+    "SQL script",
     "Manual process",
-    "Document",
-    "MS Word",
-    "MS Power Point",
-    "CSV File (CSV)",
-    "Text File (TXT)",
-    "EVIEW Files",
-    "Refinitiv EIKON platform",
     "Other",
 ]
 
-LEGAL_ENTITIES = [
-    "Eurobank S.A.",
-    "Eurobank Leasing",
-    "Eurobank Factoring",
-    "Eurobank Bulgaria",
-    "Eurobank Luxembourg",
-    "Eurobank Cyprus",
-]
-
-YES_NO = ["Yes", "No"]
-CONTROL_STORAGE_TYPES = ["Document Server", "SharePoint Server", "Database Server", "Databricks", "Other"]
-DATA_CLASSIFICATIONS = ["Public", "Internal", "Confidential", "Restricted", "Highly Restricted"]
-INPUT_SOURCE_TYPES = ["CDW", "Databricks", "Altamira", "AS400", "File", "API", "Manual input", "Other"]
-AUTOMATION_LEVELS = ["Manual", "Partially Automated", "Fully Automated"]
-RISK_ASSESSMENT_TYPES = ["Periodic", "Material Change", "Incident-triggered", "Manual trigger"]
-CONTROL_STATUSES = ["In place and evidenced", "Partially in place", "Not in place", "N/A"]
-CONTROL_EFFECTIVENESS_LEVELS = ["Strong", "Adequate", "Weak", "Not in place"]
-RISK_DIMENSIONS = ["Integrity / Accuracy", "Timeliness / Availability"]
-BASELINE_CONTROL_AREAS = [
-    "1. Registration & risk assessment",
-    "2. Privileged Access",
-    "3. Versioning & change log",
-    "4. Checks & reconciliations",
-    "5. EUC Library of Controls (CACRT)",
-    "6. Operating Procedure",
-    "7. Evidence & sign-off",
-    "8. Resilience",
-]
-
-BCBS_MATERIALITY_QUESTIONS = [
-    "Failure or error could render the relevant BCBS 239 in-scope output materially inaccurate, incomplete, delayed or unavailable",
-    "EUC constitutes a key control point within the process, where its outcome can directly trigger correction, rejection, restatement, escalation, or delayed issuance of a BCBS 239 in-scope output",
-    "EUC represents a single point of failure within a critical reporting or risk process supporting a BCBS 239 in-scope output",
-]
-
-
-FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Biannually", "Annually", "Ad hoc", "Event-driven"]
+FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Ad hoc", "Event-driven"]
 
 DOCUMENT_TYPES = [
     "Risk Assessment",
@@ -226,28 +176,14 @@ DEFAULT_REQUIRED_ARTIFACTS = {
 
 CREATE_TABLES_SQL = [
     """
-    CREATE TABLE IF NOT EXISTS user_profiles (
-        user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        full_name TEXT NOT NULL,
-        email TEXT NOT NULL,
-        role TEXT NOT NULL,
-        active_flag INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    """,
-    """
     CREATE TABLE IF NOT EXISTS eucs (
         euc_id INTEGER PRIMARY KEY AUTOINCREMENT,
         reference_id TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
         description TEXT,
         purpose TEXT,
-        legal_entity TEXT DEFAULT 'Eurobank S.A.',
         owner TEXT NOT NULL,
         owner_delegate TEXT,
-        reviewer TEXT,
         business_unit TEXT NOT NULL,
         technology_type TEXT NOT NULL,
         storage_location TEXT NOT NULL,
@@ -262,20 +198,6 @@ CREATE_TABLES_SQL = [
         recipients TEXT,
         dependencies TEXT,
         spof_indicator TEXT DEFAULT 'No',
-        supports_material_report TEXT DEFAULT 'No',
-        supports_material_kri TEXT DEFAULT 'No',
-        supports_material_model TEXT DEFAULT 'No',
-        used_by_multiple_bus TEXT DEFAULT 'No',
-        number_active_users TEXT,
-        created_by_bu TEXT DEFAULT 'Yes',
-        acquired_third_party TEXT DEFAULT 'No',
-        support_contract_sla TEXT DEFAULT 'No',
-        library_of_controls TEXT,
-        last_risk_assessment TEXT,
-        exceptions_remediation_actions TEXT,
-        industrialization_decommissioning_status TEXT,
-        materially_supports_bcbs239 TEXT DEFAULT 'No',
-        materiality_rationale TEXT,
         inherent_risk TEXT DEFAULT 'Medium',
         residual_risk TEXT DEFAULT 'Medium',
         overall_status TEXT DEFAULT 'Draft',
@@ -297,23 +219,7 @@ CREATE_TABLES_SQL = [
         component_name TEXT NOT NULL,
         component_type TEXT NOT NULL,
         technology TEXT,
-        business_unit TEXT,
-        euc_application TEXT,
-        material_report_mapping TEXT,
-        operationalization_document_link TEXT,
         storage_location TEXT,
-        controlled_storage_type TEXT,
-        input_sources TEXT,
-        cut_off_times TEXT,
-        processing_schedule TEXT,
-        execution_frequency TEXT,
-        cde_mappings TEXT,
-        data_outputs TEXT,
-        level_of_automation TEXT,
-        backup_recovery_arrangements TEXT,
-        spof_risk TEXT,
-        modification_date TEXT,
-        review_date TEXT,
         description TEXT,
         criticality TEXT,
         owner TEXT,
@@ -327,23 +233,6 @@ CREATE_TABLES_SQL = [
         euc_id INTEGER NOT NULL,
         assessment_date TEXT NOT NULL,
         assessed_by TEXT NOT NULL,
-        assessment_type TEXT,
-        materiality_q1 TEXT,
-        materiality_q2 TEXT,
-        materiality_q3 TEXT,
-        materially_supports_bcbs239 TEXT,
-        owner_integrity_level TEXT,
-        owner_timeliness_level TEXT,
-        effective_integrity_level TEXT,
-        effective_timeliness_level TEXT,
-        integrity_control_effectiveness TEXT,
-        timeliness_control_effectiveness TEXT,
-        integrity_residual_level TEXT,
-        timeliness_residual_level TEXT,
-        integrity_rationale TEXT,
-        timeliness_rationale TEXT,
-        control_assessment_json TEXT,
-        required_action_guidance TEXT,
         integrity_accuracy_score INTEGER NOT NULL,
         timeliness_availability_score INTEGER NOT NULL,
         complexity_score INTEGER NOT NULL,
@@ -543,7 +432,6 @@ CREATE_TABLES_SQL = [
 ]
 
 INDEX_SQL = [
-    "CREATE INDEX IF NOT EXISTS idx_users_username ON user_profiles(username);",
     "CREATE INDEX IF NOT EXISTS idx_eucs_owner ON eucs(owner);",
     "CREATE INDEX IF NOT EXISTS idx_eucs_status ON eucs(lifecycle_status);",
     "CREATE INDEX IF NOT EXISTS idx_docs_euc_type ON documents(euc_id, document_type);",

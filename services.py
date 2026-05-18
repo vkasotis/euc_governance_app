@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from datetime import date, datetime, timedelta
@@ -13,22 +12,13 @@ import pandas as pd
 
 from db import UPLOAD_PATH, dataframe, execute, fetch_all, fetch_one, insert_audit, utc_now
 from schema import (
-    AUTOMATION_LEVELS,
-    BASELINE_CONTROL_AREAS,
     CACRT_DIMENSIONS,
     CONTROL_AREAS,
-    CONTROL_EFFECTIVENESS_LEVELS,
-    CONTROL_STATUSES,
     DEFAULT_REQUIRED_ARTIFACTS,
     DOCUMENT_TYPES,
-    FREQUENCIES,
-    LEGAL_ENTITIES,
     LIFECYCLE_STATUSES,
-    RISK_ASSESSMENT_TYPES,
     RISK_LEVELS,
-    ROLES,
     TASK_TYPES,
-    TECHNOLOGY_TYPES,
 )
 
 OPEN_TASK_STATUSES = ("Open", "In Progress", "Blocked", "Closure Requested")
@@ -40,28 +30,15 @@ APPROVER_ROLE = "Approver / Head of Unit"
 OWNER_ROLE = "EUC Owner"
 CONTRIBUTOR_ROLE = "EUC Owner Delegate / Contributor"
 
-DEFAULT_USER_PROFILES = [
-    {"username": "Maria.Papadopoulou", "full_name": "Maria Papadopoulou", "email": "maria.papadopoulou@eurobank.gr", "role": OWNER_ROLE},
-    {"username": "Nikos.Georgiou", "full_name": "Nikos Georgiou", "email": "nikos.georgiou@eurobank.gr", "role": OWNER_ROLE},
-    {"username": "Elena.Dimitriou", "full_name": "Elena Dimitriou", "email": "elena.dimitriou@eurobank.gr", "role": OWNER_ROLE},
-    {"username": "Kostas.Ioannou", "full_name": "Kostas Ioannou", "email": "kostas.ioannou@eurobank.gr", "role": OWNER_ROLE},
-    {"username": "EUC.Contributor", "full_name": "EUC Contributor", "email": "euc.contributor@eurobank.gr", "role": CONTRIBUTOR_ROLE},
-    {"username": "Christina.Markou", "full_name": "Christina Markou", "email": "christina.markou@eurobank.gr", "role": CONTRIBUTOR_ROLE},
-    {"username": "GCC.User", "full_name": "GCC User", "email": "gcc.user@eurobank.gr", "role": GCC_ROLE},
-    {"username": "GCC.Monitor", "full_name": "GCC Monitor", "email": "gcc.monitor@eurobank.gr", "role": GCC_ROLE},
-    {"username": "DVU.Reviewer", "full_name": "Data Validation Reviewer", "email": "dvu.reviewer@eurobank.gr", "role": DVU_ROLE},
-    {"username": "Data.Validation", "full_name": "Data Validation Unit", "email": "data.validation@eurobank.gr", "role": DVU_ROLE},
-    {"username": "Admin.User", "full_name": "Admin User", "email": "admin.user@eurobank.gr", "role": ADMIN_ROLE},
-    {"username": "IT.Governance.Admin", "full_name": "IT Governance Admin", "email": "it.governance.admin@eurobank.gr", "role": ADMIN_ROLE},
-    {"username": "Head.Of.Unit", "full_name": "Head of Unit", "email": "head.of.unit@eurobank.gr", "role": APPROVER_ROLE},
-    {"username": "Approver.User", "full_name": "Approver User", "email": "approver.user@eurobank.gr", "role": APPROVER_ROLE},
-    {"username": "Internal.Audit", "full_name": "Internal Audit", "email": "internal.audit@eurobank.gr", "role": READ_ONLY_ROLE},
-    {"username": "Read.Only", "full_name": "Read Only User", "email": "read.only@eurobank.gr", "role": READ_ONLY_ROLE},
-]
-
-ROLE_USERNAMES = {}
-for _profile in DEFAULT_USER_PROFILES:
-    ROLE_USERNAMES.setdefault(_profile["role"], []).append(_profile["username"])
+ROLE_USERNAMES = {
+    OWNER_ROLE: ["Maria.Papadopoulou", "Nikos.Georgiou", "Elena.Dimitriou", "Kostas.Ioannou"],
+    CONTRIBUTOR_ROLE: ["EUC.Contributor", "Christina.Markou"],
+    GCC_ROLE: ["GCC.User", "GCC.Monitor"],
+    DVU_ROLE: ["DVU.Reviewer", "Data.Validation"],
+    ADMIN_ROLE: ["Admin.User", "IT.Governance.Admin"],
+    APPROVER_ROLE: ["Head.Of.Unit", "Approver.User"],
+    READ_ONLY_ROLE: ["Internal.Audit", "Read.Only"],
+}
 
 DEFAULT_DUE_DAYS = {
     "Registration completion": 7,
@@ -75,176 +52,9 @@ DEFAULT_DUE_DAYS = {
     "Documentation refresh": 15,
 }
 
-RISK_RANK = {"Low": 1, "Medium": 2, "High": 3, "Very High": 4}
-RANK_RISK = {v: k for k, v in RISK_RANK.items()}
-CONTROL_EFFECTIVENESS_RANK = {"Not in place": 0, "Weak": 1, "Adequate": 2, "Strong": 3}
-
-# Residual Risk Calculation Matrix from the uploaded EUC Risk Assessment workbook.
-# Rows are effective inherent risk levels; columns are derived control effectiveness levels.
-RESIDUAL_RISK_MATRIX = {
-    "Very High": {"Strong": "Medium", "Adequate": "High", "Weak": "Very High", "Not in place": "Very High"},
-    "High": {"Strong": "Low", "Adequate": "Medium", "Weak": "High", "Not in place": "High"},
-    "Medium": {"Strong": "Low", "Adequate": "Low", "Weak": "Medium", "Not in place": "Medium"},
-    "Low": {"Strong": "Low", "Adequate": "Low", "Weak": "Low", "Not in place": "Low"},
-}
-
-CONTROL_DEFAULT_MEANINGS = {
-    "1. Registration & risk assessment": "EUC registered; latest risk assessment completed; inventory current.",
-    "2. Privileged Access": "Named roles assigned; access reviewed; unauthorized access prevented.",
-    "3. Versioning & change log": "Controlled repository used; release versions tagged; material changes traceable.",
-    "4. Checks & reconciliations": "Input validation, timeliness checks and reconciliations operate with evidence.",
-    "5. EUC Library of Controls (CACRT)": "CACRT controls documented with owner, frequency, thresholds, evidence links.",
-    "6. Operating Procedure": "Current runbook/operating procedure exists and aligns to RRF operationalisation where applicable.",
-    "7. Evidence & sign-off": "Testing, UAT, and sign-offs retained to support control-effectiveness ratings.",
-    "8. Resilience": "Backup, restore, fallback steps, recoverability evidence, and deputy cover are in place where needed.",
-}
-
-INTEGRITY_CONTROL_KEYS = [
-    "1. Registration & risk assessment",
-    "2. Privileged Access",
-    "3. Versioning & change log",
-    "4. Checks & reconciliations",
-    "5. EUC Library of Controls (CACRT)",
-    "6. Operating Procedure",
-    "7. Evidence & sign-off",
-]
-
-TIMELINESS_CONTROL_KEYS = [
-    "1. Registration & risk assessment",
-    "2. Privileged Access",
-    "5. EUC Library of Controls (CACRT)",
-    "7. Evidence & sign-off",
-    "8. Resilience",
-]
-
-# The workbook allows N/A only for EUC Library of Controls / CACRT and Evidence & sign-off.
-NA_ALLOWED_CONTROL_KEYS = {
-    "5. EUC Library of Controls (CACRT)",
-    "7. Evidence & sign-off",
-}
-
-OWNER_INHERENT_LEVELS = ["Low", "Medium", "High"]
-
 
 def username_options_for_role(role: str) -> list[str]:
-    db_users = dataframe(
-        "SELECT username FROM user_profiles WHERE role = ? AND active_flag = 1 ORDER BY username",
-        (role,),
-    )
-    if not db_users.empty:
-        return db_users["username"].tolist()
     return ROLE_USERNAMES.get(role, ["Demo.User"])
-
-
-def seed_user_profiles(username: str = "system") -> None:
-    """Seed and maintain the local user/email directory used for task routing."""
-    now = utc_now()
-    for profile in DEFAULT_USER_PROFILES:
-        execute(
-            """
-            INSERT OR IGNORE INTO user_profiles(username, full_name, email, role, active_flag, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?)
-            """,
-            (profile["username"], profile["full_name"], profile["email"], profile["role"], now, now),
-        )
-
-
-def user_directory(role: str | None = None, active_only: bool = True) -> pd.DataFrame:
-    where = []
-    params: list[Any] = []
-    if role:
-        where.append("role = ?")
-        params.append(role)
-    if active_only:
-        where.append("active_flag = 1")
-    sql = "SELECT user_id, username, full_name, email, role, active_flag, created_at, updated_at FROM user_profiles"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY role, full_name, username"
-    return dataframe(sql, tuple(params))
-
-
-def get_user_profile(username: str | None) -> dict[str, Any] | None:
-    if not username:
-        return None
-    return fetch_one("SELECT * FROM user_profiles WHERE username = ?", (username,))
-
-
-def _validate_user_profile_payload(payload: dict[str, Any]) -> None:
-    """Validate the local MVP user directory record."""
-    required = ["username", "full_name", "email", "role"]
-    missing = [field for field in required if not str(payload.get(field, "")).strip()]
-    if missing:
-        raise ValueError("Missing mandatory user fields: " + ", ".join(missing))
-    if "@" not in str(payload.get("email", "")):
-        raise ValueError("A valid email address is required.")
-    if payload.get("role") not in ROLES:
-        raise ValueError("Role is not valid for this application.")
-
-
-def update_user_profile(user_id: int, payload: dict[str, Any], performed_by: str) -> int:
-    """Update a selected user profile by stable user_id.
-
-    This supports table-driven editing in Admin Configuration and avoids
-    accidentally creating a second user when an administrator edits the
-    username of an existing profile.
-    """
-    _validate_user_profile_payload(payload)
-    old = fetch_one("SELECT * FROM user_profiles WHERE user_id = ?", (int(user_id),))
-    if not old:
-        raise ValueError("Selected user profile no longer exists.")
-    duplicate = fetch_one(
-        "SELECT user_id FROM user_profiles WHERE username = ? AND user_id <> ?",
-        (payload["username"], int(user_id)),
-    )
-    if duplicate:
-        raise ValueError("Another user profile already uses this username.")
-    now = utc_now()
-    execute(
-        """
-        UPDATE user_profiles
-        SET username = ?, full_name = ?, email = ?, role = ?, active_flag = ?, updated_at = ?
-        WHERE user_id = ?
-        """,
-        (
-            payload["username"],
-            payload["full_name"],
-            payload["email"],
-            payload["role"],
-            int(bool(payload.get("active_flag", True))),
-            now,
-            int(user_id),
-        ),
-    )
-    new_snapshot = dict(payload)
-    new_snapshot.update({"user_id": int(user_id), "updated_at": now})
-    insert_audit("User Profile", int(user_id), "UPDATE", performed_by, old, new_snapshot)
-    return int(user_id)
-
-
-def upsert_user_profile(payload: dict[str, Any], performed_by: str) -> int:
-    _validate_user_profile_payload(payload)
-    old = get_user_profile(payload["username"])
-    now = utc_now()
-    if old:
-        return update_user_profile(int(old["user_id"]), payload, performed_by)
-    user_id = execute(
-        """
-        INSERT INTO user_profiles(username, full_name, email, role, active_flag, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            payload["username"],
-            payload["full_name"],
-            payload["email"],
-            payload["role"],
-            int(bool(payload.get("active_flag", True))),
-            now,
-            now,
-        ),
-    )
-    insert_audit("User Profile", user_id, "CREATE", performed_by, None, payload)
-    return user_id
 
 
 def is_read_only(role: str) -> bool:
@@ -255,29 +65,8 @@ def can_view_all(role: str) -> bool:
     return role in {ADMIN_ROLE, GCC_ROLE, DVU_ROLE, APPROVER_ROLE, READ_ONLY_ROLE}
 
 
-def can_view_all_eucs(role: str) -> bool:
-    """Portfolio-wide EUC visibility.
-
-    EUC Owners and Contributors see only EUCs where they are owner, delegate,
-    or creator. GCC, Data Validation, IT Governance Admin, and Internal Audit
-    can view the full EUC portfolio. Approvers retain approval workflows but
-    do not receive blanket inventory visibility in the MVP.
-    """
-    return role in {ADMIN_ROLE, GCC_ROLE, DVU_ROLE, READ_ONLY_ROLE}
-
-
 def can_configure(role: str) -> bool:
     return role == ADMIN_ROLE
-
-
-def can_delete_records(role: str) -> bool:
-    """Governed hard-delete authority for MVP records.
-
-    Deletes are restricted to GCC and Group IT Governance Administrator and
-    always create an immutable audit-trail DELETE event before the row is
-    removed. This keeps demo data manageable while preserving accountability.
-    """
-    return role in {GCC_ROLE, ADMIN_ROLE}
 
 
 def can_review(role: str) -> bool:
@@ -309,7 +98,7 @@ def add_days(days: int) -> str:
 
 
 def risk_level_from_average(avg: float) -> str:
-    """Legacy fallback scoring rule retained for old seed payloads and migrations."""
+    """Configurable MVP scoring rule for inherent/residual risk calculation."""
     if avg < 2.0:
         return "Low"
     if avg < 3.0:
@@ -319,143 +108,13 @@ def risk_level_from_average(avg: float) -> str:
     return "Very High"
 
 
-def score_to_risk_level(score: int | float | str | None) -> str:
-    try:
-        score_f = float(score or 2)
-    except (TypeError, ValueError):
-        return str(score) if score in RISK_RANK else "Medium"
-    return risk_level_from_average(score_f)
-
-
-def risk_rank(level: str | None) -> int:
-    return RISK_RANK.get(str(level or "Medium"), 2)
-
-
-def highest_risk_level(levels: list[str]) -> str:
-    return RANK_RISK.get(max(risk_rank(level) for level in levels), "Medium")
-
-
-def material_supports_bcbs239(q1: str | None, q2: str | None, q3: str | None) -> str:
-    return "Yes" if any(str(v).strip().lower() == "yes" for v in [q1, q2, q3]) else "No"
-
-
-def derive_control_effectiveness(statuses: list[str]) -> str:
-    """Replicates the workbook LET formulas for derived control effectiveness."""
-    normalized = [status if status in CONTROL_STATUSES else "Not in place" for status in statuses]
-    not_in = normalized.count("Not in place")
-    partial = normalized.count("Partially in place")
-    evidenced = normalized.count("In place and evidenced")
-    total = len(normalized)
-    if not_in >= 2:
-        return "Not in place"
-    if not_in == 1:
-        return "Weak"
-    if partial == total:
-        return "Weak"
-    if evidenced > total / 2:
-        return "Strong"
-    if evidenced >= 1:
-        return "Adequate"
-    return "Adequate"
-
-
-def residual_from_matrix(effective_inherent: str, control_effectiveness: str) -> str:
-    return RESIDUAL_RISK_MATRIX.get(effective_inherent, RESIDUAL_RISK_MATRIX["Medium"]).get(control_effectiveness, "Medium")
-
-
-def required_action_guidance(residual_risk: str) -> str:
-    if residual_risk == "Very High":
-        return "Outside tolerance: escalation and time-bound remediation required; do not operate material-report EUCs with unmitigated Very High residual risk."
-    if residual_risk == "High":
-        return "Remediation plan required with target dates; consider exception governance if temporary operation is needed."
-    if residual_risk == "Medium":
-        return "Operate with monitoring and timely remediation of gaps."
-    return "Maintain controls and reassess on change."
-
-
-def calculate_policy_risk(payload: dict[str, Any]) -> dict[str, Any]:
-    """Calculate EUC risk using the uploaded Risk Assessment workbook methodology.
-
-    The workbook keeps the owner-entered inherent risk separate from the
-    calculated effective inherent risk. Owner levels are Low/Medium/High only.
-    If any BCBS 239 materiality question is Yes, both effective inherent-risk
-    dimensions are forced to Very High while the original owner selections are
-    retained for auditability.
-    """
-    q1 = payload.get("materiality_q1", "No")
-    q2 = payload.get("materiality_q2", "No")
-    q3 = payload.get("materiality_q3", "No")
-    # Excel B10 = IF(COUNTIF(B7:B9,"Yes")>0,"Yes","No").
-    # The three materiality questions are the source of truth.
-    material = material_supports_bcbs239(q1, q2, q3)
-
-    owner_integrity = payload.get("owner_integrity_level") or score_to_risk_level(payload.get("integrity_accuracy_score"))
-    owner_timeliness = payload.get("owner_timeliness_level") or score_to_risk_level(payload.get("timeliness_availability_score"))
-    # Owner dropdown in the workbook excludes Very High. Normalize legacy values.
-    if owner_integrity == "Very High":
-        owner_integrity = "High"
-    if owner_timeliness == "Very High":
-        owner_timeliness = "High"
-
-    # Workbook rule: if material = Yes, C22/C23 become Very High; B22/B23 remain
-    # the owner's Low/Medium/High selections.
-    if material == "Yes":
-        effective_integrity = "Very High"
-        effective_timeliness = "Very High"
-    else:
-        effective_integrity = owner_integrity
-        effective_timeliness = owner_timeliness
-
-    controls = payload.get("controls") or {}
-    if not isinstance(controls, dict):
-        controls = {}
-    # Backwards-compatible default: treat missing controls as in place and evidenced unless explicitly supplied.
-    control_statuses = {
-        control: controls.get(control, {}).get("status") if isinstance(controls.get(control), dict) else controls.get(control)
-        for control in BASELINE_CONTROL_AREAS
-    }
-    for control in BASELINE_CONTROL_AREAS:
-        control_statuses[control] = control_statuses.get(control) or payload.get(f"control_{BASELINE_CONTROL_AREAS.index(control) + 1}_status") or "In place and evidenced"
-        if control_statuses[control] == "N/A" and control not in NA_ALLOWED_CONTROL_KEYS:
-            # Defensive normalization for non-UI/API payloads. The Streamlit UI
-            # does not offer N/A for these controls.
-            control_statuses[control] = "Not in place"
-
-    integrity_ce = derive_control_effectiveness([control_statuses[c] for c in INTEGRITY_CONTROL_KEYS])
-    timeliness_ce = derive_control_effectiveness([control_statuses[c] for c in TIMELINESS_CONTROL_KEYS])
-    integrity_residual = residual_from_matrix(effective_integrity, integrity_ce)
-    timeliness_residual = residual_from_matrix(effective_timeliness, timeliness_ce)
-    inherent = highest_risk_level([effective_integrity, effective_timeliness])
-    raw_residual = highest_risk_level([integrity_residual, timeliness_residual])
-    residual = raw_residual
-    # Workbook rule: material BCBS-supporting EUCs do not land below Medium residual risk.
-    if material == "Yes" and risk_rank(residual) < risk_rank("Medium"):
-        residual = "Medium"
-    return {
-        "materially_supports_bcbs239": material,
-        "owner_integrity_level": owner_integrity,
-        "owner_timeliness_level": owner_timeliness,
-        "effective_integrity_level": effective_integrity,
-        "effective_timeliness_level": effective_timeliness,
-        "integrity_control_effectiveness": integrity_ce,
-        "timeliness_control_effectiveness": timeliness_ce,
-        "integrity_residual_level": integrity_residual,
-        "timeliness_residual_level": timeliness_residual,
-        "inherent_risk": inherent,
-        "residual_risk": residual,
-        "required_action_guidance": required_action_guidance(residual),
-        "control_statuses": control_statuses,
-    }
-
-
 def generate_reference_id() -> str:
     row = fetch_one("SELECT COALESCE(MAX(euc_id), 0) + 1 AS next_id FROM eucs")
-    # The uploaded inventory workbook uses EUC.001-style references.
-    return f"EUC.{int(row['next_id']):03d}"
+    return f"EUC-{int(row['next_id']):06d}"
 
 
 def all_eucs(role: str | None = None, username: str | None = None) -> pd.DataFrame:
-    if role and username and not can_view_all_eucs(role):
+    if role and username and not can_view_all(role):
         return dataframe(
             """
             SELECT * FROM eucs
@@ -465,6 +124,70 @@ def all_eucs(role: str | None = None, username: str | None = None) -> pd.DataFra
             (username, username, username),
         )
     return dataframe("SELECT * FROM eucs ORDER BY euc_id DESC")
+
+
+def dashboard_euc_scope_condition(username: str, role: str, alias: str = "e") -> tuple[str, list[Any]]:
+    """Return SQL filtering for the personal Home/Dashboard scope.
+
+    The portfolio pages intentionally retain role-wide visibility. The Home/Dashboard
+    is personal: it includes EUCs directly owned/delegated/created by the user, plus
+    EUCs with tasks or findings specifically assigned to the user. For centralized
+    governance roles, role-queue tasks are also included because those records are
+    operationally assigned to that role.
+    """
+    a = alias
+    include_role_queue = role in {GCC_ROLE, DVU_ROLE, ADMIN_ROLE, APPROVER_ROLE}
+    task_assignment = "dt.assigned_to = ? OR dt.assigned_role = ?" if include_role_queue else "dt.assigned_to = ?"
+    params: list[Any] = [username, username, username, username]
+    if include_role_queue:
+        params.append(role)
+    params.extend([username, username])
+    return (
+        f"""(
+            {a}.owner = ?
+            OR {a}.owner_delegate = ?
+            OR {a}.created_by = ?
+            OR EXISTS (
+                SELECT 1 FROM tasks dt
+                WHERE dt.euc_id = {a}.euc_id
+                  AND ({task_assignment})
+            )
+            OR EXISTS (
+                SELECT 1 FROM findings df
+                WHERE df.euc_id = {a}.euc_id
+                  AND (df.assigned_to = ? OR df.created_by = ?)
+            )
+        )""",
+        params,
+    )
+
+
+def dashboard_eucs(role: str, username: str) -> pd.DataFrame:
+    condition, params = dashboard_euc_scope_condition(username, role, "e")
+    return dataframe(f"SELECT e.* FROM eucs e WHERE {condition} ORDER BY e.euc_id DESC", tuple(params))
+
+
+def get_dashboard_tasks(role: str, username: str, open_only: bool = True) -> pd.DataFrame:
+    include_role_queue = role in {GCC_ROLE, DVU_ROLE, ADMIN_ROLE, APPROVER_ROLE}
+    if include_role_queue:
+        assignment_sql = "(t.assigned_to = ? OR t.assigned_role = ? OR e.owner = ? OR e.owner_delegate = ? OR e.created_by = ?)"
+        params: list[Any] = [username, role, username, username, username]
+    else:
+        assignment_sql = "(t.assigned_to = ? OR e.owner = ? OR e.owner_delegate = ? OR e.created_by = ?)"
+        params = [username, username, username, username]
+    where = [assignment_sql]
+    if open_only:
+        where.append("t.status IN ('Open','In Progress','Blocked','Closure Requested')")
+    sql = """
+        SELECT t.*, e.reference_id, e.name AS euc_name, e.owner, e.residual_risk,
+               CASE WHEN t.due_date IS NOT NULL AND date(t.due_date) < date('now') AND t.status NOT IN ('Closed','Cancelled') THEN 1 ELSE 0 END AS overdue
+        FROM tasks t
+        LEFT JOIN eucs e ON e.euc_id = t.euc_id
+        WHERE """ + " AND ".join(where) + """
+        ORDER BY overdue DESC, date(t.due_date), t.priority DESC
+    """
+    return dataframe(sql, tuple(params))
+
 
 
 def get_euc(euc_id: int) -> dict[str, Any] | None:
@@ -512,36 +235,26 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
     if errors:
         raise ValueError("\n".join(errors))
 
-    material = material_supports_bcbs239(
-        payload.get("supports_material_report"),
-        payload.get("supports_material_kri"),
-        payload.get("supports_material_model"),
-    )
     now = utc_now()
     reference_id = generate_reference_id()
     euc_id = execute(
         """
         INSERT INTO eucs(
-            reference_id, name, description, purpose, legal_entity, owner, owner_delegate, reviewer, business_unit,
-            technology_type, storage_location, frequency, schedule, cut_off, business_context, bcbs239_output_mapping,
-            cde_linkage, inputs, outputs, recipients, dependencies, spof_indicator, supports_material_report,
-            supports_material_kri, supports_material_model, used_by_multiple_bus, number_active_users, created_by_bu,
-            acquired_third_party, support_contract_sla, library_of_controls, last_risk_assessment,
-            exceptions_remediation_actions, industrialization_decommissioning_status, materially_supports_bcbs239,
-            materiality_rationale, inherent_risk, residual_risk, overall_status, documentation_completeness_status,
-            lifecycle_status, next_review_date, industrialization_rationale, decommissioning_rationale, created_by,
-            created_at, updated_at, mapping_na_justification
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            reference_id, name, description, purpose, owner, owner_delegate, business_unit, technology_type,
+            storage_location, frequency, schedule, cut_off, business_context, bcbs239_output_mapping, cde_linkage,
+            inputs, outputs, recipients, dependencies, spof_indicator, inherent_risk, residual_risk,
+            overall_status, documentation_completeness_status, lifecycle_status, next_review_date,
+            industrialization_rationale, decommissioning_rationale, created_by, created_at, updated_at,
+            mapping_na_justification
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             reference_id,
             payload.get("name"),
             payload.get("description"),
             payload.get("purpose"),
-            payload.get("legal_entity", "Eurobank S.A."),
             payload.get("owner"),
             payload.get("owner_delegate"),
-            payload.get("reviewer"),
             payload.get("business_unit"),
             payload.get("technology_type"),
             payload.get("storage_location"),
@@ -556,20 +269,6 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
             payload.get("recipients"),
             payload.get("dependencies"),
             payload.get("spof_indicator", "No"),
-            payload.get("supports_material_report", "No"),
-            payload.get("supports_material_kri", "No"),
-            payload.get("supports_material_model", "No"),
-            payload.get("used_by_multiple_bus", "No"),
-            payload.get("number_active_users"),
-            payload.get("created_by_bu", "Yes"),
-            payload.get("acquired_third_party", "No"),
-            payload.get("support_contract_sla", "No"),
-            payload.get("library_of_controls"),
-            payload.get("last_risk_assessment"),
-            payload.get("exceptions_remediation_actions"),
-            payload.get("industrialization_decommissioning_status"),
-            material,
-            payload.get("materiality_rationale"),
             payload.get("inherent_risk", "Medium"),
             payload.get("residual_risk", "Medium"),
             payload.get("overall_status", "Registered"),
@@ -588,8 +287,8 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
     create_task(
         euc_id=euc_id,
         task_type="Risk assessment",
-        title=f"Complete policy risk assessment for {reference_id}",
-        description="Risk assessment task generated after EUC Inventory registration.",
+        title=f"Complete risk assessment for {reference_id}",
+        description="Risk assessment task generated after EUC registration.",
         assigned_to=payload.get("owner"),
         assigned_role=OWNER_ROLE,
         due_date=add_days(DEFAULT_DUE_DAYS["Risk assessment"]),
@@ -609,6 +308,7 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
     )
     return euc_id
 
+
 def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
     old = get_euc(euc_id)
     if not old:
@@ -620,10 +320,8 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "name",
         "description",
         "purpose",
-        "legal_entity",
         "owner",
         "owner_delegate",
-        "reviewer",
         "business_unit",
         "technology_type",
         "storage_location",
@@ -638,19 +336,6 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "recipients",
         "dependencies",
         "spof_indicator",
-        "supports_material_report",
-        "supports_material_kri",
-        "supports_material_model",
-        "used_by_multiple_bus",
-        "number_active_users",
-        "created_by_bu",
-        "acquired_third_party",
-        "support_contract_sla",
-        "library_of_controls",
-        "last_risk_assessment",
-        "exceptions_remediation_actions",
-        "industrialization_decommissioning_status",
-        "materiality_rationale",
         "overall_status",
         "lifecycle_status",
         "next_review_date",
@@ -658,13 +343,6 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "decommissioning_rationale",
         "mapping_na_justification",
     ]
-    payload = dict(payload)
-    payload["materially_supports_bcbs239"] = material_supports_bcbs239(
-        payload.get("supports_material_report", old.get("supports_material_report")),
-        payload.get("supports_material_kri", old.get("supports_material_kri")),
-        payload.get("supports_material_model", old.get("supports_material_model")),
-    )
-    allowed_fields.append("materially_supports_bcbs239")
     assignments = ", ".join([f"{field} = ?" for field in allowed_fields])
     values = [payload.get(field, old.get(field)) for field in allowed_fields]
     values.extend([utc_now(), euc_id])
@@ -682,359 +360,88 @@ def update_euc_status(euc_id: int, lifecycle_status: str, username: str, overall
 
 
 def get_components(euc_id: int) -> pd.DataFrame:
-    return dataframe(
-        """
-        SELECT c.*, e.reference_id, e.name AS euc_name
-        FROM components c
-        JOIN eucs e ON e.euc_id = c.euc_id
-        WHERE c.euc_id = ?
-        ORDER BY c.component_id
-        """,
-        (euc_id,),
-    )
-
-
-COMPONENT_FIELDS = [
-    "euc_id",
-    "component_name",
-    "component_type",
-    "technology",
-    "business_unit",
-    "euc_application",
-    "material_report_mapping",
-    "operationalization_document_link",
-    "storage_location",
-    "controlled_storage_type",
-    "input_sources",
-    "cut_off_times",
-    "processing_schedule",
-    "execution_frequency",
-    "cde_mappings",
-    "data_outputs",
-    "level_of_automation",
-    "backup_recovery_arrangements",
-    "spof_risk",
-    "modification_date",
-    "review_date",
-    "description",
-    "criticality",
-    "owner",
-]
+    return dataframe("SELECT * FROM components WHERE euc_id = ? ORDER BY component_id", (euc_id,))
 
 
 def create_component(payload: dict[str, Any], username: str) -> int:
     now = utc_now()
     component_id = execute(
         """
-        INSERT INTO components(
-            euc_id, component_name, component_type, technology, business_unit, euc_application,
-            material_report_mapping, operationalization_document_link, storage_location, controlled_storage_type,
-            input_sources, cut_off_times, processing_schedule, execution_frequency, cde_mappings, data_outputs,
-            level_of_automation, backup_recovery_arrangements, spof_risk, modification_date, review_date,
-            description, criticality, owner, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO components(euc_id, component_name, component_type, technology, storage_location, description, criticality, owner, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload["euc_id"],
             payload["component_name"],
             payload["component_type"],
             payload.get("technology"),
-            payload.get("business_unit"),
-            payload.get("euc_application"),
-            payload.get("material_report_mapping"),
-            payload.get("operationalization_document_link"),
             payload.get("storage_location"),
-            payload.get("controlled_storage_type"),
-            payload.get("input_sources"),
-            payload.get("cut_off_times"),
-            payload.get("processing_schedule"),
-            payload.get("execution_frequency"),
-            payload.get("cde_mappings"),
-            payload.get("data_outputs"),
-            payload.get("level_of_automation"),
-            payload.get("backup_recovery_arrangements"),
-            payload.get("spof_risk"),
-            payload.get("modification_date"),
-            payload.get("review_date"),
             payload.get("description"),
             payload.get("criticality"),
             payload.get("owner"),
             now,
         ),
     )
-    insert_audit("EUC Asset", component_id, "CREATE", username, None, payload)
+    insert_audit("Component", component_id, "CREATE", username, None, payload)
     return component_id
 
 
-def get_component(component_id: int) -> dict[str, Any] | None:
-    return fetch_one(
-        """
-        SELECT c.*, e.reference_id, e.name AS euc_name
-        FROM components c
-        JOIN eucs e ON e.euc_id = c.euc_id
-        WHERE c.component_id = ?
-        """,
-        (component_id,),
-    )
-
-
-def update_component(component_id: int, payload: dict[str, Any], username: str) -> None:
-    old = get_component(component_id)
-    if not old:
-        raise ValueError("EUC asset was not found.")
-    if not str(payload.get("component_name", "")).strip():
-        raise ValueError("Files / Asset name is required.")
-    allowed = [field for field in COMPONENT_FIELDS if field != "euc_id"]
-    assignments = ", ".join([f"{field} = ?" for field in allowed])
-    values = [payload.get(field, old.get(field)) for field in allowed]
-    values.append(component_id)
-    execute(f"UPDATE components SET {assignments} WHERE component_id = ?", tuple(values))
-    insert_audit("EUC Asset", component_id, "UPDATE", username, old, payload)
-
-
 def get_risk_assessments(euc_id: int) -> pd.DataFrame:
-    return dataframe("SELECT * FROM risk_assessments WHERE euc_id = ? ORDER BY version DESC, assessment_id DESC", (euc_id,))
-
-
-def get_risk_assessment(assessment_id: int) -> dict[str, Any] | None:
-    return fetch_one(
-        """
-        SELECT ra.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit
-        FROM risk_assessments ra
-        JOIN eucs e ON e.euc_id = ra.euc_id
-        WHERE ra.assessment_id = ?
-        """,
-        (assessment_id,),
-    )
+    return dataframe("SELECT * FROM risk_assessments WHERE euc_id = ? ORDER BY version DESC", (euc_id,))
 
 
 def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
-    """Create a policy-style risk assessment aligned to the uploaded workbook.
-
-    The previous MVP accepted five numeric sliders. This function still accepts that
-    payload as a fallback, but the primary path now follows the workbook logic:
-    materiality questions -> effective inherent risk -> baseline controls -> residual matrix.
-    """
-    calculation = calculate_policy_risk(payload)
-    controls_payload = payload.get("controls") or {}
-    control_rows = []
-    for control in BASELINE_CONTROL_AREAS:
-        value = controls_payload.get(control, {}) if isinstance(controls_payload, dict) else {}
-        if isinstance(value, dict):
-            status = value.get("status") or calculation["control_statuses"].get(control)
-            rationale = value.get("rationale")
-        else:
-            status = value or calculation["control_statuses"].get(control)
-            rationale = None
-        if status == "N/A" and control not in NA_ALLOWED_CONTROL_KEYS:
-            raise ValueError(f"N/A is not permitted for control: {control}")
-        control_rows.append(
-            {
-                "control_area": control,
-                "status": status,
-                "meaning": CONTROL_DEFAULT_MEANINGS.get(control),
-                "rationale": rationale,
-            }
-        )
-
+    scores = [
+        int(payload["integrity_accuracy_score"]),
+        int(payload["timeliness_availability_score"]),
+        int(payload["complexity_score"]),
+        int(payload["business_criticality_score"]),
+    ]
+    control_effectiveness = int(payload["control_effectiveness_score"])
+    inherent_avg = sum(scores) / len(scores)
+    residual_avg = (sum(scores) + control_effectiveness) / 5
+    inherent_risk = risk_level_from_average(inherent_avg)
+    residual_risk = risk_level_from_average(residual_avg)
     row = fetch_one("SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM risk_assessments WHERE euc_id = ?", (payload["euc_id"],))
     version = int(row["next_version"])
     now = utc_now()
     assessment_id = execute(
         """
         INSERT INTO risk_assessments(
-            euc_id, assessment_date, assessed_by, assessment_type, materiality_q1, materiality_q2, materiality_q3,
-            materially_supports_bcbs239, owner_integrity_level, owner_timeliness_level, effective_integrity_level,
-            effective_timeliness_level, integrity_control_effectiveness, timeliness_control_effectiveness,
-            integrity_residual_level, timeliness_residual_level, integrity_rationale, timeliness_rationale,
-            control_assessment_json, required_action_guidance, integrity_accuracy_score, timeliness_availability_score,
+            euc_id, assessment_date, assessed_by, integrity_accuracy_score, timeliness_availability_score,
             complexity_score, business_criticality_score, control_effectiveness_score, inherent_risk, residual_risk,
             rationale, trigger_type, version, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload["euc_id"],
             payload.get("assessment_date", date.today().isoformat()),
             payload.get("assessed_by", username),
-            payload.get("assessment_type") or payload.get("trigger_type", "Manual trigger"),
-            payload.get("materiality_q1", "No"),
-            payload.get("materiality_q2", "No"),
-            payload.get("materiality_q3", "No"),
-            calculation["materially_supports_bcbs239"],
-            calculation["owner_integrity_level"],
-            calculation["owner_timeliness_level"],
-            calculation["effective_integrity_level"],
-            calculation["effective_timeliness_level"],
-            calculation["integrity_control_effectiveness"],
-            calculation["timeliness_control_effectiveness"],
-            calculation["integrity_residual_level"],
-            calculation["timeliness_residual_level"],
-            payload.get("integrity_rationale"),
-            payload.get("timeliness_rationale"),
-            json.dumps(control_rows, ensure_ascii=False),
-            calculation["required_action_guidance"],
-            risk_rank(calculation["effective_integrity_level"]),
-            risk_rank(calculation["effective_timeliness_level"]),
-            risk_rank(calculation["inherent_risk"]),
-            risk_rank(calculation["inherent_risk"]),
-            max(CONTROL_EFFECTIVENESS_RANK.get(calculation["integrity_control_effectiveness"], 2), CONTROL_EFFECTIVENESS_RANK.get(calculation["timeliness_control_effectiveness"], 2)),
-            calculation["inherent_risk"],
-            calculation["residual_risk"],
+            scores[0],
+            scores[1],
+            scores[2],
+            scores[3],
+            control_effectiveness,
+            inherent_risk,
+            residual_risk,
             payload.get("rationale"),
-            payload.get("trigger_type") or payload.get("assessment_type", "Manual trigger"),
+            payload.get("trigger_type", "Manual trigger"),
             version,
             now,
         ),
     )
-    lifecycle = "Awaiting Documentation" if calculation["residual_risk"] in {"Low", "Medium", "High", "Very High"} else "Registered"
+    lifecycle = "Awaiting Documentation" if residual_risk in {"Low", "Medium", "High", "Very High"} else "Registered"
     execute(
         """
         UPDATE eucs
-        SET inherent_risk = ?, residual_risk = ?, materially_supports_bcbs239 = ?, lifecycle_status = ?, overall_status = ?,
-            last_risk_assessment = ?, updated_at = ?
+        SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?, updated_at = ?
         WHERE euc_id = ?
         """,
-        (
-            calculation["inherent_risk"],
-            calculation["residual_risk"],
-            calculation["materially_supports_bcbs239"],
-            lifecycle,
-            lifecycle,
-            payload.get("assessment_date", date.today().isoformat()),
-            utc_now(),
-            payload["euc_id"],
-        ),
+        (inherent_risk, residual_risk, lifecycle, lifecycle, utc_now(), payload["euc_id"]),
     )
-    insert_audit("Risk Assessment", assessment_id, "CREATE", username, None, {**payload, **calculation})
+    insert_audit("Risk Assessment", assessment_id, "CREATE", username, None, {**payload, "inherent_risk": inherent_risk, "residual_risk": residual_risk})
     evaluate_and_update_completeness(payload["euc_id"], username, create_missing_tasks=True)
     return assessment_id
-
-
-DELETE_ENTITY_CONFIG = {
-    "EUC": {"table": "eucs", "pk": "euc_id", "euc_fk": "euc_id"},
-    "EUC Asset": {"table": "components", "pk": "component_id", "euc_fk": "euc_id"},
-    "Risk Assessment": {"table": "risk_assessments", "pk": "assessment_id", "euc_fk": "euc_id"},
-    "Document": {"table": "documents", "pk": "document_id", "euc_fk": "euc_id"},
-    "Task": {"table": "tasks", "pk": "task_id", "euc_fk": "euc_id"},
-    "Finding": {"table": "findings", "pk": "finding_id", "euc_fk": "euc_id"},
-    "Review": {"table": "reviews", "pk": "review_id", "euc_fk": "euc_id"},
-    "Exception": {"table": "exceptions", "pk": "exception_id", "euc_fk": "euc_id"},
-    "Incident": {"table": "incidents", "pk": "incident_id", "euc_fk": "euc_id"},
-    "Material Change": {"table": "material_changes", "pk": "change_id", "euc_fk": "euc_id"},
-    "Required Artifact Rule": {"table": "required_artifact_rules", "pk": "rule_id", "euc_fk": None},
-    "Reference Data": {"table": "reference_data", "pk": "ref_id", "euc_fk": None},
-    "Due-date Rule": {"table": "due_date_rules", "pk": "rule_id", "euc_fk": None},
-    "User Profile": {"table": "user_profiles", "pk": "user_id", "euc_fk": None},
-}
-
-
-def _delete_document_file(old: dict[str, Any]) -> None:
-    file_path = old.get("file_path") if old else None
-    if not file_path:
-        return
-    try:
-        path = Path(file_path)
-        if not path.is_absolute():
-            path = Path(__file__).resolve().parent / path
-        if path.exists() and path.is_file():
-            path.unlink()
-    except OSError:
-        # Deletion of the DB record must not fail because a local demo file is
-        # already missing or locked. The row snapshot remains in the audit trail.
-        pass
-
-
-def _refresh_euc_after_assessment_delete(euc_id: int, username: str) -> None:
-    latest = fetch_one(
-        """
-        SELECT inherent_risk, residual_risk, materially_supports_bcbs239, assessment_date
-        FROM risk_assessments
-        WHERE euc_id = ?
-        ORDER BY version DESC, assessment_id DESC
-        LIMIT 1
-        """,
-        (euc_id,),
-    )
-    if latest:
-        execute(
-            """
-            UPDATE eucs
-            SET inherent_risk = ?, residual_risk = ?, materially_supports_bcbs239 = ?, last_risk_assessment = ?, updated_at = ?
-            WHERE euc_id = ?
-            """,
-            (
-                latest.get("inherent_risk"),
-                latest.get("residual_risk"),
-                latest.get("materially_supports_bcbs239"),
-                latest.get("assessment_date"),
-                utc_now(),
-                euc_id,
-            ),
-        )
-    else:
-        execute(
-            """
-            UPDATE eucs
-            SET inherent_risk = 'Medium', residual_risk = 'Medium', materially_supports_bcbs239 = 'No',
-                last_risk_assessment = NULL, documentation_completeness_status = 'Incomplete', updated_at = ?
-            WHERE euc_id = ?
-            """,
-            (utc_now(), euc_id),
-        )
-    evaluate_and_update_completeness(euc_id, username, create_missing_tasks=False)
-
-
-def delete_record(entity_type: str, entity_id: int | str, username: str, role: str) -> None:
-    """Delete one MVP record with audit trail. Restricted to GCC and IT Governance Admin."""
-    if not can_delete_records(role):
-        raise PermissionError("Only GCC and Group IT Governance Administrator can delete records.")
-    if entity_type not in DELETE_ENTITY_CONFIG:
-        raise ValueError(f"Unsupported delete entity type: {entity_type}")
-    cfg = DELETE_ENTITY_CONFIG[entity_type]
-    table = cfg["table"]
-    pk = cfg["pk"]
-    old = fetch_one(f"SELECT * FROM {table} WHERE {pk} = ?", (entity_id,))
-    if not old:
-        raise ValueError(f"{entity_type} {entity_id} was not found.")
-    euc_id = old.get(cfg.get("euc_fk")) if cfg.get("euc_fk") else None
-
-    if entity_type == "EUC":
-        # Child rows are deleted explicitly because the MVP schema uses normal
-        # foreign keys rather than ON DELETE CASCADE. Audit the EUC snapshot as
-        # the governed deletion record, and keep audit_trail immutable.
-        for doc in fetch_all("SELECT * FROM documents WHERE euc_id = ?", (entity_id,)):
-            _delete_document_file(doc)
-        for child_table in [
-            "components",
-            "risk_assessments",
-            "tasks",
-            "findings",
-            "reviews",
-            "exceptions",
-            "incidents",
-            "material_changes",
-            "documents",
-        ]:
-            execute(f"DELETE FROM {child_table} WHERE euc_id = ?", (entity_id,))
-        execute("DELETE FROM eucs WHERE euc_id = ?", (entity_id,))
-        insert_audit(entity_type, entity_id, "DELETE", username, old, None)
-        return
-
-    if entity_type == "Document":
-        _delete_document_file(old)
-        execute("UPDATE tasks SET closure_evidence_document_id = NULL WHERE closure_evidence_document_id = ?", (entity_id,))
-        execute("UPDATE exceptions SET closure_evidence_document_id = NULL WHERE closure_evidence_document_id = ?", (entity_id,))
-
-    if entity_type == "Review":
-        execute("UPDATE findings SET review_id = NULL WHERE review_id = ?", (entity_id,))
-
-    execute(f"DELETE FROM {table} WHERE {pk} = ?", (entity_id,))
-    insert_audit(entity_type, entity_id, "DELETE", username, old, None)
-
-    if entity_type == "Risk Assessment" and euc_id:
-        _refresh_euc_after_assessment_delete(int(euc_id), username)
-    elif entity_type == "Document" and euc_id:
-        evaluate_and_update_completeness(int(euc_id), username, create_missing_tasks=False)
 
 
 def safe_filename(filename: str) -> str:
@@ -1185,49 +592,23 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
     required = required_documents_for_euc(euc_id)
     docs = get_documents(euc_id)
     rows: list[dict[str, Any]] = []
-    latest_assessment = fetch_one(
-        """
-        SELECT assessment_id, version, assessment_date, assessed_by, inherent_risk, residual_risk
-        FROM risk_assessments
-        WHERE euc_id = ?
-        ORDER BY version DESC, assessment_id DESC
-        LIMIT 1
-        """,
-        (euc_id,),
-    )
     for _, req in required.iterrows():
         doc_type = req["required_document_type"]
-        if doc_type == "Risk Assessment":
-            if latest_assessment:
-                status = "Accepted"
-                document_id = None
-                reviewed_by = latest_assessment.get("assessed_by")
-                comments = (
-                    f"Satisfied by Risk Assessment #{latest_assessment['assessment_id']} "
-                    f"v{latest_assessment['version']} dated {latest_assessment['assessment_date']} "
-                    f"({latest_assessment['inherent_risk']} inherent / {latest_assessment['residual_risk']} residual)."
-                )
-            else:
-                status = "Missing"
-                document_id = None
-                reviewed_by = None
-                comments = "No risk assessment exists for this EUC. Complete the Risk Assessment page; do not upload a risk assessment document."
+        matching = docs[docs["document_type"] == doc_type] if not docs.empty else pd.DataFrame()
+        if matching.empty:
+            status = "Missing"
+            document_id = None
+            reviewed_by = None
+            comments = None
         else:
-            matching = docs[docs["document_type"] == doc_type] if not docs.empty else pd.DataFrame()
-            if matching.empty:
-                status = "Missing"
-                document_id = None
-                reviewed_by = None
-                comments = None
-            else:
-                status_priority = {"Accepted": 1, "Submitted": 2, "Rejected": 3, "Expired": 4, "Pending": 5, "Missing": 6, "Superseded": 7}
-                matching = matching.copy()
-                matching["_rank"] = matching["status"].map(status_priority).fillna(99)
-                best = matching.sort_values(["_rank", "uploaded_at"]).iloc[0]
-                status = best["status"]
-                document_id = int(best["document_id"])
-                reviewed_by = best.get("reviewed_by")
-                comments = best.get("comments")
+            status_priority = {"Accepted": 1, "Submitted": 2, "Rejected": 3, "Expired": 4, "Pending": 5, "Missing": 6, "Superseded": 7}
+            matching = matching.copy()
+            matching["_rank"] = matching["status"].map(status_priority).fillna(99)
+            best = matching.sort_values(["_rank", "uploaded_at"]).iloc[0]
+            status = best["status"]
+            document_id = int(best["document_id"])
+            reviewed_by = best.get("reviewed_by")
+            comments = best.get("comments")
         rows.append(
             {
                 "document_type": doc_type,
@@ -1241,6 +622,7 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
 
 def evaluate_and_update_completeness(euc_id: int, username: str, create_missing_tasks: bool = False) -> str:
     checklist = artifact_checklist(euc_id)
@@ -1259,32 +641,23 @@ def evaluate_and_update_completeness(euc_id: int, username: str, create_missing_
     if create_missing_tasks and not checklist.empty:
         euc = get_euc(euc_id)
         for _, row in checklist[checklist["status"].isin(["Missing", "Rejected", "Expired"])].iterrows():
-            if row["document_type"] == "Risk Assessment":
-                task_type = "Risk assessment"
-                title = "Complete mandatory Risk Assessment"
-                description = "Generated by required artifact checklist. Complete the Risk Assessment page; do not upload a risk assessment document."
-                due_days = DEFAULT_DUE_DAYS["Risk assessment"]
-            else:
-                task_type = "Missing evidence"
-                title = f"Provide mandatory {row['document_type']}"
-                description = "Generated by required artifact checklist. Override requires an approved exception."
-                due_days = DEFAULT_DUE_DAYS["Missing evidence"]
+            title = f"Provide mandatory {row['document_type']}"
             existing = fetch_one(
                 """
                 SELECT task_id FROM tasks
-                WHERE euc_id = ? AND task_type = ? AND title = ? AND status IN ('Open','In Progress','Blocked')
+                WHERE euc_id = ? AND task_type = 'Missing evidence' AND title = ? AND status IN ('Open','In Progress','Blocked')
                 """,
-                (euc_id, task_type, title),
+                (euc_id, title),
             )
             if not existing:
                 create_task(
                     euc_id=euc_id,
-                    task_type=task_type,
+                    task_type="Missing evidence",
                     title=title,
-                    description=description,
+                    description="Generated by required artifact checklist. Override requires an approved exception.",
                     assigned_to=euc.get("owner") if euc else None,
                     assigned_role=OWNER_ROLE,
-                    due_date=add_days(due_days),
+                    due_date=add_days(DEFAULT_DUE_DAYS["Missing evidence"]),
                     priority="High" if euc and euc.get("residual_risk") in {"High", "Very High"} else "Medium",
                     username=username,
                 )
@@ -1314,19 +687,11 @@ def create_task(
     return task_id
 
 
-def get_tasks(
-    role: str | None = None,
-    username: str | None = None,
-    open_only: bool = False,
-    euc_id: int | None = None,
-) -> pd.DataFrame:
+def get_tasks(role: str | None = None, username: str | None = None, open_only: bool = False) -> pd.DataFrame:
     where = []
     params: list[Any] = []
     if open_only:
         where.append("t.status IN ('Open','In Progress','Blocked','Closure Requested')")
-    if euc_id:
-        where.append("t.euc_id = ?")
-        params.append(int(euc_id))
     if role and username and not can_view_all(role):
         where.append("(t.assigned_to = ? OR t.assigned_role = ?)")
         params.extend([username, role])
@@ -1335,11 +700,9 @@ def get_tasks(
         params.extend([role, username])
     sql = """
         SELECT t.*, e.reference_id, e.name AS euc_name, e.owner, e.residual_risk,
-               up.full_name AS assigned_full_name, up.email AS assigned_email,
                CASE WHEN t.due_date IS NOT NULL AND date(t.due_date) < date('now') AND t.status NOT IN ('Closed','Cancelled') THEN 1 ELSE 0 END AS overdue
         FROM tasks t
         LEFT JOIN eucs e ON e.euc_id = t.euc_id
-        LEFT JOIN user_profiles up ON up.username = t.assigned_to
     """
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -1671,43 +1034,105 @@ def gcc_monitoring_dataset() -> dict[str, pd.DataFrame]:
     }
 
 
-def dashboard_metrics() -> dict[str, int]:
+def _count(sql: str, params: tuple[Any, ...] = ()) -> int:
+    row = fetch_one(sql, params) or {"n": 0}
+    return int(row.get("n") or 0)
+
+
+def dashboard_metrics(role: str, username: str) -> dict[str, int]:
+    condition, params = dashboard_euc_scope_condition(username, role, "e")
     values = fetch_one(
-        """
+        f"""
         SELECT
             COUNT(*) AS total_eucs,
-            SUM(CASE WHEN residual_risk IN ('High','Very High') THEN 1 ELSE 0 END) AS high_very_high,
-            SUM(CASE WHEN lifecycle_status = 'Industrialization Candidate' THEN 1 ELSE 0 END) AS industrialization_candidates,
-            SUM(CASE WHEN lifecycle_status = 'Decommissioned' THEN 1 ELSE 0 END) AS decommissioned
-        FROM eucs
-        """
+            SUM(CASE WHEN e.residual_risk IN ('High','Very High') THEN 1 ELSE 0 END) AS high_very_high,
+            SUM(CASE WHEN e.lifecycle_status = 'Industrialization Candidate' THEN 1 ELSE 0 END) AS industrialization_candidates,
+            SUM(CASE WHEN e.lifecycle_status = 'Decommissioned' THEN 1 ELSE 0 END) AS decommissioned,
+            SUM(CASE WHEN e.documentation_completeness_status <> 'Complete' THEN 1 ELSE 0 END) AS missing_docs,
+            SUM(CASE WHEN e.next_review_date IS NOT NULL AND date(e.next_review_date) < date('now') THEN 1 ELSE 0 END) AS overdue_reviews
+        FROM eucs e
+        WHERE {condition}
+        """,
+        tuple(params),
     ) or {}
-    tasks = fetch_one("SELECT COUNT(*) AS n FROM tasks WHERE status NOT IN ('Closed','Cancelled')") or {"n": 0}
-    overdue_reviews = fetch_one("SELECT COUNT(*) AS n FROM eucs WHERE next_review_date IS NOT NULL AND date(next_review_date) < date('now')") or {"n": 0}
-    findings = fetch_one("SELECT COUNT(*) AS n FROM findings WHERE status NOT IN ('Closed','Cancelled')") or {"n": 0}
-    exceptions = fetch_one("SELECT COUNT(*) AS n FROM exceptions WHERE status NOT IN ('Closed','Withdrawn','Rejected')") or {"n": 0}
-    incidents = fetch_one("SELECT COUNT(*) AS n FROM incidents WHERE status <> 'Closed'") or {"n": 0}
-    missing = fetch_one("SELECT COUNT(*) AS n FROM eucs WHERE documentation_completeness_status <> 'Complete'") or {"n": 0}
+
+    task_df = get_dashboard_tasks(role, username, open_only=True)
+    open_tasks = 0 if task_df.empty else len(task_df)
+
+    findings = _count(
+        f"""
+        SELECT COUNT(*) AS n
+        FROM findings f
+        JOIN eucs e ON e.euc_id = f.euc_id
+        WHERE f.status NOT IN ('Closed','Cancelled')
+          AND (f.assigned_to = ? OR f.created_by = ? OR {condition})
+        """,
+        tuple([username, username] + params),
+    )
+    exceptions = _count(
+        f"""
+        SELECT COUNT(*) AS n
+        FROM exceptions x
+        JOIN eucs e ON e.euc_id = x.euc_id
+        WHERE x.status NOT IN ('Closed','Withdrawn','Rejected')
+          AND {condition}
+        """,
+        tuple(params),
+    )
+    incidents = _count(
+        f"""
+        SELECT COUNT(*) AS n
+        FROM incidents i
+        JOIN eucs e ON e.euc_id = i.euc_id
+        WHERE i.status <> 'Closed'
+          AND {condition}
+        """,
+        tuple(params),
+    )
     return {
-        "Total EUCs": int(values.get("total_eucs") or 0),
-        "Missing mandatory docs": int(missing.get("n") or 0),
-        "Overdue reviews": int(overdue_reviews.get("n") or 0),
-        "Open findings": int(findings.get("n") or 0),
-        "Open remediation tasks": int(tasks.get("n") or 0),
-        "Open exceptions": int(exceptions.get("n") or 0),
-        "Open incidents": int(incidents.get("n") or 0),
+        "My EUCs / relevant EUCs": int(values.get("total_eucs") or 0),
+        "Missing mandatory docs": int(values.get("missing_docs") or 0),
+        "Overdue reviews": int(values.get("overdue_reviews") or 0),
+        "Open findings": findings,
+        "Open remediation tasks": open_tasks,
+        "Open exceptions": exceptions,
+        "Open incidents": incidents,
         "High / Very High EUCs": int(values.get("high_very_high") or 0),
         "Industrialization candidates": int(values.get("industrialization_candidates") or 0),
         "Decommissioned EUCs": int(values.get("decommissioned") or 0),
     }
 
 
-def chart_data() -> dict[str, pd.DataFrame]:
+def chart_data(role: str, username: str) -> dict[str, pd.DataFrame]:
+    condition, params = dashboard_euc_scope_condition(username, role, "e")
     return {
-        "by_lifecycle": dataframe("SELECT lifecycle_status, COUNT(*) AS count FROM eucs GROUP BY lifecycle_status ORDER BY count DESC"),
-        "by_risk": dataframe("SELECT residual_risk, COUNT(*) AS count FROM eucs GROUP BY residual_risk"),
-        "by_business_unit": dataframe("SELECT business_unit, COUNT(*) AS count FROM eucs GROUP BY business_unit ORDER BY count DESC"),
-        "tasks_by_status": dataframe("SELECT status, COUNT(*) AS count FROM tasks GROUP BY status"),
+        "by_lifecycle": dataframe(
+            f"""SELECT e.lifecycle_status, COUNT(*) AS count
+                FROM eucs e WHERE {condition}
+                GROUP BY e.lifecycle_status ORDER BY count DESC""",
+            tuple(params),
+        ),
+        "by_risk": dataframe(
+            f"""SELECT e.residual_risk, COUNT(*) AS count
+                FROM eucs e WHERE {condition}
+                GROUP BY e.residual_risk""",
+            tuple(params),
+        ),
+        "by_business_unit": dataframe(
+            f"""SELECT e.business_unit, COUNT(*) AS count
+                FROM eucs e WHERE {condition}
+                GROUP BY e.business_unit ORDER BY count DESC""",
+            tuple(params),
+        ),
+        "tasks_by_status": dataframe(
+            """SELECT t.status, COUNT(*) AS count
+                FROM tasks t
+                LEFT JOIN eucs e ON e.euc_id = t.euc_id
+                WHERE (t.assigned_to = ? OR e.owner = ? OR e.owner_delegate = ? OR e.created_by = ?
+                       OR (? IN ('GCC','Data Validation Unit','Group IT Governance Administrator','Approver / Head of Unit') AND t.assigned_role = ?))
+                GROUP BY t.status""",
+            (username, username, username, username, role, role),
+        ),
     }
 
 
@@ -1828,18 +1253,11 @@ def required_rules_table() -> pd.DataFrame:
     return dataframe("SELECT * FROM required_artifact_rules ORDER BY risk_level, required_document_type")
 
 
-def reference_data_table(category: str | None = None) -> pd.DataFrame:
-    if category:
-        return dataframe("SELECT * FROM reference_data WHERE category = ? ORDER BY category, value", (category,))
-    return dataframe("SELECT * FROM reference_data ORDER BY category, value")
-
-
 def due_date_rules_table() -> pd.DataFrame:
     return dataframe("SELECT * FROM due_date_rules ORDER BY task_type, risk_level")
 
 
 def initialize_reference_data(username: str = "system") -> None:
-    seed_user_profiles(username)
     seed_required_rules(username)
     constants = {
         "document_type": DOCUMENT_TYPES,
@@ -1865,196 +1283,6 @@ def initialize_reference_data(username: str = "system") -> None:
             """,
             (task_type, days, username, username),
         )
-
-
-
-# ---------------------------------------------------------------------------
-# Record update helpers used by table-select/edit UI patterns.
-# These functions intentionally keep updates explicit and write audit events.
-# ---------------------------------------------------------------------------
-
-def get_task(task_id: int) -> dict[str, Any] | None:
-    return fetch_one("SELECT * FROM tasks WHERE task_id = ?", (int(task_id),))
-
-
-def update_task_full(task_id: int, payload: dict[str, Any], username: str) -> None:
-    old = get_task(int(task_id))
-    if not old:
-        raise ValueError("Task not found")
-    allowed = ["task_type", "title", "description", "assigned_to", "assigned_role", "due_date", "status", "priority", "closure_reason", "closure_evidence_document_id"]
-    if not str(payload.get("title", old.get("title") or "")).strip():
-        raise ValueError("Task title is required.")
-    status = payload.get("status", old.get("status"))
-    closed_at = utc_now() if status in {"Closed", "Cancelled"} else None
-    assignments = ", ".join([f"{field} = ?" for field in allowed]) + ", closed_at = ?"
-    values = [payload.get(field, old.get(field)) for field in allowed] + [closed_at, int(task_id)]
-    execute(f"UPDATE tasks SET {assignments} WHERE task_id = ?", tuple(values))
-    insert_audit("Task", int(task_id), "UPDATE", username, old, {field: payload.get(field, old.get(field)) for field in allowed})
-
-
-def update_document_metadata(document_id: int, payload: dict[str, Any], username: str, review_update: bool = False) -> None:
-    old = fetch_one("SELECT * FROM documents WHERE document_id = ?", (int(document_id),))
-    if not old:
-        raise ValueError("Document not found")
-    allowed = ["document_type", "comments", "deficiency_tag"]
-    if review_update:
-        allowed += ["status", "reviewed_by", "reviewed_at"]
-    if not str(payload.get("document_type", old.get("document_type") or "")).strip():
-        raise ValueError("Document type is required.")
-    update_payload = dict(payload)
-    if review_update:
-        update_payload["reviewed_by"] = username
-        update_payload["reviewed_at"] = utc_now()
-    assignments = ", ".join([f"{field} = ?" for field in allowed])
-    values = [update_payload.get(field, old.get(field)) for field in allowed] + [int(document_id)]
-    execute(f"UPDATE documents SET {assignments} WHERE document_id = ?", tuple(values))
-    action = "REVIEW" if review_update else "UPDATE"
-    insert_audit("Document", int(document_id), action, username, old, {field: update_payload.get(field, old.get(field)) for field in allowed})
-    evaluate_and_update_completeness(int(old["euc_id"]), username, create_missing_tasks=review_update)
-
-
-def update_review(review_id: int, payload: dict[str, Any], username: str) -> None:
-    old = fetch_one("SELECT * FROM reviews WHERE review_id = ?", (int(review_id),))
-    if not old:
-        raise ValueError("Review not found")
-    allowed = ["review_type", "outcome", "comments", "review_date"]
-    assignments = ", ".join([f"{field} = ?" for field in allowed])
-    values = [payload.get(field, old.get(field)) for field in allowed] + [int(review_id)]
-    execute(f"UPDATE reviews SET {assignments} WHERE review_id = ?", tuple(values))
-    insert_audit("Review", int(review_id), "UPDATE", username, old, {field: payload.get(field, old.get(field)) for field in allowed})
-
-
-def update_finding_full(finding_id: int, payload: dict[str, Any], username: str) -> None:
-    old = fetch_one("SELECT * FROM findings WHERE finding_id = ?", (int(finding_id),))
-    if not old:
-        raise ValueError("Finding not found")
-    if not str(payload.get("finding_description", old.get("finding_description") or "")).strip():
-        raise ValueError("Finding description is required.")
-    allowed = ["severity", "requirement", "control_area", "finding_description", "remediation_required", "assigned_to", "due_date", "status", "closure_comments"]
-    status = payload.get("status", old.get("status"))
-    closed_at = utc_now() if status == "Closed" else None
-    assignments = ", ".join([f"{field} = ?" for field in allowed]) + ", closed_at = ?"
-    values = [payload.get(field, old.get(field)) for field in allowed] + [closed_at, int(finding_id)]
-    execute(f"UPDATE findings SET {assignments} WHERE finding_id = ?", tuple(values))
-    insert_audit("Finding", int(finding_id), "UPDATE", username, old, {field: payload.get(field, old.get(field)) for field in allowed})
-
-
-def update_exception_full(exception_id: int, payload: dict[str, Any], username: str) -> None:
-    old = fetch_one("SELECT * FROM exceptions WHERE exception_id = ?", (int(exception_id),))
-    if not old:
-        raise ValueError("Exception not found")
-    if not str(payload.get("control_gap", old.get("control_gap") or "")).strip():
-        raise ValueError("Control gap is required.")
-    allowed = ["control_gap", "root_cause", "compensating_controls", "residual_risk", "remediation_plan", "target_date", "expiry_date", "approval_status", "approved_by", "status", "closure_evidence_document_id"]
-    assignments = ", ".join([f"{field} = ?" for field in allowed])
-    values = [payload.get(field, old.get(field)) for field in allowed] + [int(exception_id)]
-    execute(f"UPDATE exceptions SET {assignments} WHERE exception_id = ?", tuple(values))
-    insert_audit("Exception", int(exception_id), "UPDATE", username, old, {field: payload.get(field, old.get(field)) for field in allowed})
-
-
-def update_incident(incident_id: int, payload: dict[str, Any], username: str) -> None:
-    old = fetch_one("SELECT * FROM incidents WHERE incident_id = ?", (int(incident_id),))
-    if not old:
-        raise ValueError("Incident not found")
-    allowed = ["affected_outputs", "incident_date", "impact_summary", "containment_status", "correction_status", "rca_status", "remediation_actions", "status"]
-    assignments = ", ".join([f"{field} = ?" for field in allowed])
-    values = [payload.get(field, old.get(field)) for field in allowed] + [int(incident_id)]
-    execute(f"UPDATE incidents SET {assignments} WHERE incident_id = ?", tuple(values))
-    insert_audit("Incident", int(incident_id), "UPDATE", username, old, {field: payload.get(field, old.get(field)) for field in allowed})
-
-
-def update_material_change(change_id: int, payload: dict[str, Any], username: str) -> None:
-    old = fetch_one("SELECT * FROM material_changes WHERE change_id = ?", (int(change_id),))
-    if not old:
-        raise ValueError("Material change not found")
-    if not str(payload.get("description", old.get("description") or "")).strip():
-        raise ValueError("Description is required.")
-    allowed = ["change_type", "description", "impact_assessment", "reassessment_required", "documentation_refresh_required", "status"]
-    update_payload = dict(payload)
-    update_payload["reassessment_required"] = int(bool(update_payload.get("reassessment_required", old.get("reassessment_required"))))
-    update_payload["documentation_refresh_required"] = int(bool(update_payload.get("documentation_refresh_required", old.get("documentation_refresh_required"))))
-    assignments = ", ".join([f"{field} = ?" for field in allowed])
-    values = [update_payload.get(field, old.get(field)) for field in allowed] + [int(change_id)]
-    execute(f"UPDATE material_changes SET {assignments} WHERE change_id = ?", tuple(values))
-    insert_audit("Material Change", int(change_id), "UPDATE", username, old, {field: update_payload.get(field, old.get(field)) for field in allowed})
-
-
-def update_required_rule(rule_id: int, payload: dict[str, Any], username: str) -> None:
-    old = fetch_one("SELECT * FROM required_artifact_rules WHERE rule_id = ?", (int(rule_id),))
-    if not old:
-        raise ValueError("Required artifact rule not found")
-    allowed = ["risk_level", "lifecycle_stage", "required_document_type", "control_area", "cacrt_dimension", "mandatory_flag", "maker_checker_comments", "approval_status", "approved_by"]
-    update_payload = dict(payload)
-    update_payload["mandatory_flag"] = int(bool(update_payload.get("mandatory_flag", old.get("mandatory_flag"))))
-    if update_payload.get("approval_status") == "Approved" and not update_payload.get("approved_by"):
-        update_payload["approved_by"] = username
-    assignments = ", ".join([f"{field} = ?" for field in allowed])
-    values = [update_payload.get(field, old.get(field)) for field in allowed] + [int(rule_id)]
-    execute(f"UPDATE required_artifact_rules SET {assignments} WHERE rule_id = ?", tuple(values))
-    insert_audit("Required Artifact Rule", int(rule_id), "UPDATE", username, old, {field: update_payload.get(field, old.get(field)) for field in allowed})
-
-
-def update_reference_value(ref_id: int, payload: dict[str, Any], username: str) -> None:
-    old = fetch_one("SELECT * FROM reference_data WHERE ref_id = ?", (int(ref_id),))
-    if not old:
-        raise ValueError("Reference data row not found")
-    if not str(payload.get("value", old.get("value") or "")).strip():
-        raise ValueError("Reference value is required.")
-    duplicate = fetch_one(
-        "SELECT ref_id FROM reference_data WHERE category = ? AND value = ? AND ref_id <> ?",
-        (payload.get("category", old.get("category")), payload.get("value", old.get("value")), int(ref_id)),
-    )
-    if duplicate:
-        raise ValueError("A reference value with this category and value already exists.")
-    allowed = ["category", "value", "active_flag", "maker_checker_comments", "approval_status", "approved_by"]
-    update_payload = dict(payload)
-    update_payload["active_flag"] = int(bool(update_payload.get("active_flag", old.get("active_flag"))))
-    if update_payload.get("approval_status") == "Approved" and not update_payload.get("approved_by"):
-        update_payload["approved_by"] = username
-    assignments = ", ".join([f"{field} = ?" for field in allowed])
-    values = [update_payload.get(field, old.get(field)) for field in allowed] + [int(ref_id)]
-    execute(f"UPDATE reference_data SET {assignments} WHERE ref_id = ?", tuple(values))
-    insert_audit("Reference Data", int(ref_id), "UPDATE", username, old, {field: update_payload.get(field, old.get(field)) for field in allowed})
-
-
-def create_due_date_rule(payload: dict[str, Any], username: str) -> int:
-    rule_id = execute(
-        """
-        INSERT INTO due_date_rules(task_type, risk_level, due_days, active_flag, maker_checker_comments, proposed_by, approved_by, approval_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            payload["task_type"],
-            payload.get("risk_level", "Any"),
-            int(payload["due_days"]),
-            int(bool(payload.get("active_flag", True))),
-            payload.get("maker_checker_comments"),
-            username,
-            username if payload.get("approval_status", "Approved") == "Approved" else None,
-            payload.get("approval_status", "Approved"),
-        ),
-    )
-    insert_audit("Due-date Rule", rule_id, "CREATE", username, None, payload)
-    return rule_id
-
-
-def update_due_date_rule(rule_id: int, payload: dict[str, Any], username: str) -> None:
-    old = fetch_one("SELECT * FROM due_date_rules WHERE rule_id = ?", (int(rule_id),))
-    if not old:
-        raise ValueError("Due-date rule not found")
-    allowed = ["task_type", "risk_level", "due_days", "active_flag", "maker_checker_comments", "approval_status", "approved_by"]
-    update_payload = dict(payload)
-    update_payload["due_days"] = int(update_payload.get("due_days", old.get("due_days")))
-    update_payload["active_flag"] = int(bool(update_payload.get("active_flag", old.get("active_flag"))))
-    if update_payload.get("approval_status") == "Approved" and not update_payload.get("approved_by"):
-        update_payload["approved_by"] = username
-    assignments = ", ".join([f"{field} = ?" for field in allowed])
-    values = [update_payload.get(field, old.get(field)) for field in allowed] + [int(rule_id)]
-    try:
-        execute(f"UPDATE due_date_rules SET {assignments} WHERE rule_id = ?", tuple(values))
-    except Exception as exc:
-        raise ValueError("A due-date rule with this task type and risk level may already exist.") from exc
-    insert_audit("Due-date Rule", int(rule_id), "UPDATE", username, old, {field: update_payload.get(field, old.get(field)) for field in allowed})
 
 
 def close_open_obligations_for_decommissioning(euc_id: int, username: str) -> dict[str, int]:

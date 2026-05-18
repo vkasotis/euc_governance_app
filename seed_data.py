@@ -53,32 +53,6 @@ def _doc(euc_id: int, doc_type: str, status: str, uploaded_by: str = SEED_USER, 
     )
 
 
-
-def _controls_for_risk(target_risk: str) -> dict[str, dict[str, str]]:
-    """Seed control statuses to produce the intended workbook-style residual risk mix."""
-    if target_risk == "Very High":
-        statuses = ["Not in place", "Not in place", "Partially in place", "Partially in place", "Not in place", "Partially in place", "Not in place", "Partially in place"]
-    elif target_risk == "High":
-        statuses = ["In place and evidenced", "Partially in place", "Partially in place", "In place and evidenced", "Partially in place", "Partially in place", "In place and evidenced", "Partially in place"]
-    elif target_risk == "Medium":
-        statuses = ["In place and evidenced", "In place and evidenced", "In place and evidenced", "In place and evidenced", "In place and evidenced", "In place and evidenced", "In place and evidenced", "In place and evidenced"]
-    else:
-        statuses = ["In place and evidenced"] * 8
-    controls = {}
-    names = [
-        "1. Registration & risk assessment",
-        "2. Privileged Access",
-        "3. Versioning & change log",
-        "4. Checks & reconciliations",
-        "5. EUC Library of Controls (CACRT)",
-        "6. Operating Procedure",
-        "7. Evidence & sign-off",
-        "8. Resilience",
-    ]
-    for name, status in zip(names, statuses):
-        controls[name] = {"status": status, "rationale": f"Seeded {status.lower()} control state for demo risk mix."}
-    return controls
-
 def seed_database(force: bool = False) -> None:
     """Create a representative demo portfolio. Safe to run repeatedly unless force is True."""
     init_db()
@@ -111,7 +85,6 @@ def seed_database(force: bool = False) -> None:
                 "name": name,
                 "description": f"Seeded MVP EUC for {unit}.",
                 "purpose": "Supports regulatory, management, or control reporting.",
-                "legal_entity": "Eurobank S.A.",
                 "owner": owner,
                 "owner_delegate": delegate,
                 "business_unit": unit,
@@ -128,19 +101,6 @@ def seed_database(force: bool = False) -> None:
                 "recipients": "Business unit head; GCC; Data Validation Unit",
                 "dependencies": "Data warehouse; network drive; upstream source owners",
                 "spof_indicator": spof,
-                "supports_material_report": "Yes" if _risk in {"Medium", "High", "Very High"} else "No",
-                "supports_material_kri": "Yes" if idx % 2 == 0 else "No",
-                "supports_material_model": "Yes" if tech in {"Python script", "Notebook"} else "No",
-                "used_by_multiple_bus": "Yes" if idx % 3 == 0 else "No",
-                "number_active_users": "2+" if idx % 3 == 0 else "1",
-                "created_by_bu": "Yes" if tech != "Report" else "No",
-                "acquired_third_party": "Yes" if tech == "Access" else "No",
-                "support_contract_sla": "Yes" if tech in {"Report", "SQL script"} else "No",
-                "library_of_controls": "CACRT-LIB-" + str(idx + 1).zfill(3),
-                "last_risk_assessment": (date.today() - timedelta(days=idx * 7)).isoformat(),
-                "exceptions_remediation_actions": "See open governance records where applicable.",
-                "industrialization_decommissioning_status": "Candidate review" if idx in {4, 9} else None,
-                "materiality_rationale": "Seed mapping to BCBS 239 in-scope outputs from EUC Inventory workbook fields.",
                 "next_review_date": (date.today() + timedelta(days=45 - idx * 12)).isoformat(),
             },
             SEED_USER,
@@ -151,17 +111,13 @@ def seed_database(force: bool = False) -> None:
                 "euc_id": euc_id,
                 "assessment_date": (date.today() - timedelta(days=idx * 7)).isoformat(),
                 "assessed_by": owner,
-                "assessment_type": "Periodic",
-                "trigger_type": "Periodic",
-                "materiality_q1": "Yes" if _risk in {"Medium", "High", "Very High"} else "No",
-                "materiality_q2": "Yes" if idx % 2 == 0 and _risk != "Low" else "No",
-                "materiality_q3": spof,
-                "owner_integrity_level": _risk,
-                "owner_timeliness_level": _risk if _risk != "Low" else "Medium",
-                "controls": _controls_for_risk(_risk),
-                "integrity_rationale": "Seeded integrity/accuracy rationale aligned to uploaded risk assessment workbook.",
-                "timeliness_rationale": "Seeded timeliness/availability rationale aligned to uploaded risk assessment workbook.",
-                "rationale": "Seeded policy-style assessment using materiality, baseline controls, and residual matrix.",
+                "integrity_accuracy_score": scores[0],
+                "timeliness_availability_score": scores[1],
+                "complexity_score": scores[2],
+                "business_criticality_score": scores[3],
+                "control_effectiveness_score": scores[4],
+                "rationale": "Seeded assessment using MVP scoring rule.",
+                "trigger_type": "Periodic review",
             },
             owner,
         )
@@ -172,24 +128,8 @@ def seed_database(force: bool = False) -> None:
                     "component_name": f"{name} component {n+1}",
                     "component_type": tech if n == 0 else ("SQL script" if tech != "SQL script" else "Operating Procedure"),
                     "technology": tech,
-                    "business_unit": unit,
-                    "euc_application": name,
-                    "material_report_mapping": "Capital adequacy output" if idx % 2 else "Liquidity and risk data aggregation output",
-                    "operationalization_document_link": "Policy 242 / RRF operationalisation pack",
                     "storage_location": f"//eurobank/euc/components/{idx+1}/{n+1}",
-                    "controlled_storage_type": "SharePoint Server" if n == 0 else "Document Server",
-                    "input_sources": "Data warehouse extracts; manual adjustments; upstream reports",
-                    "cut_off_times": "18:00 CET",
-                    "processing_schedule": "T+3 close process" if idx % 2 else "08:00 CET daily run",
-                    "execution_frequency": "Monthly" if idx % 3 else "Daily",
-                    "cde_mappings": "Customer ID; Exposure; Product; Counterparty" if idx % 2 else "Account; Currency; Balance; Maturity",
-                    "data_outputs": "Validated report pack; exception list; management sign-off summary",
-                    "level_of_automation": "Partially Automated" if tech != "Manual process" else "Manual",
-                    "backup_recovery_arrangements": "Folder backup and named deputy procedure retained in the runbook.",
-                    "spof_risk": spof,
-                    "modification_date": date.today().isoformat(),
-                    "review_date": (date.today() + timedelta(days=45 - idx * 12)).isoformat(),
-                    "description": "Seeded EUC Asset Inventory row.",
+                    "description": "Seeded component record.",
                     "criticality": "High" if scores[0] >= 4 else "Medium",
                     "owner": owner,
                 },
@@ -198,7 +138,7 @@ def seed_database(force: bool = False) -> None:
 
     # Evidence mix: accepted, submitted, rejected, and intentionally missing artifacts.
     for euc_id in created_ids[:7]:
-        # Risk Assessment is satisfied from the risk_assessments table, not by an uploaded document.
+        _doc(euc_id, "Risk Assessment", "Accepted")
         _doc(euc_id, "Operating Procedure", "Accepted")
     for euc_id in created_ids[1:5]:
         _doc(euc_id, "Library of Controls", "Submitted")
