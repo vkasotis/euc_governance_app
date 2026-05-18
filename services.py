@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import date, datetime, timedelta
@@ -12,13 +13,21 @@ import pandas as pd
 
 from db import UPLOAD_PATH, dataframe, execute, fetch_all, fetch_one, insert_audit, utc_now
 from schema import (
+    AUTOMATION_LEVELS,
+    BASELINE_CONTROL_AREAS,
     CACRT_DIMENSIONS,
     CONTROL_AREAS,
+    CONTROL_EFFECTIVENESS_LEVELS,
+    CONTROL_STATUSES,
     DEFAULT_REQUIRED_ARTIFACTS,
     DOCUMENT_TYPES,
+    FREQUENCIES,
+    LEGAL_ENTITIES,
     LIFECYCLE_STATUSES,
+    RISK_ASSESSMENT_TYPES,
     RISK_LEVELS,
     TASK_TYPES,
+    TECHNOLOGY_TYPES,
 )
 
 OPEN_TASK_STATUSES = ("Open", "In Progress", "Blocked", "Closure Requested")
@@ -51,6 +60,48 @@ DEFAULT_DUE_DAYS = {
     "Closure evidence": 10,
     "Documentation refresh": 15,
 }
+
+RISK_RANK = {"Low": 1, "Medium": 2, "High": 3, "Very High": 4}
+RANK_RISK = {v: k for k, v in RISK_RANK.items()}
+CONTROL_EFFECTIVENESS_RANK = {"Not in place": 0, "Weak": 1, "Adequate": 2, "Strong": 3}
+
+# Residual Risk Calculation Matrix from the uploaded EUC Risk Assessment workbook.
+# Rows are effective inherent risk levels; columns are derived control effectiveness levels.
+RESIDUAL_RISK_MATRIX = {
+    "Very High": {"Strong": "Medium", "Adequate": "High", "Weak": "Very High", "Not in place": "Very High"},
+    "High": {"Strong": "Low", "Adequate": "Medium", "Weak": "High", "Not in place": "High"},
+    "Medium": {"Strong": "Low", "Adequate": "Low", "Weak": "Medium", "Not in place": "Medium"},
+    "Low": {"Strong": "Low", "Adequate": "Low", "Weak": "Low", "Not in place": "Low"},
+}
+
+CONTROL_DEFAULT_MEANINGS = {
+    "1. Registration & risk assessment": "EUC registered; latest risk assessment completed; inventory current.",
+    "2. Privileged Access": "Named roles assigned; access reviewed; unauthorized access prevented.",
+    "3. Versioning & change log": "Controlled repository used; release versions tagged; material changes traceable.",
+    "4. Checks & reconciliations": "Input validation, timeliness checks and reconciliations operate with evidence.",
+    "5. EUC Library of Controls (CACRT)": "CACRT controls documented with owner, frequency, thresholds, evidence links.",
+    "6. Operating Procedure": "Current runbook/operating procedure exists and aligns to RRF operationalisation where applicable.",
+    "7. Evidence & sign-off": "Testing, UAT, and sign-offs retained to support control-effectiveness ratings.",
+    "8. Resilience": "Backup, restore, fallback steps, recoverability evidence, and deputy cover are in place where needed.",
+}
+
+INTEGRITY_CONTROL_KEYS = [
+    "1. Registration & risk assessment",
+    "2. Privileged Access",
+    "3. Versioning & change log",
+    "4. Checks & reconciliations",
+    "5. EUC Library of Controls (CACRT)",
+    "6. Operating Procedure",
+    "7. Evidence & sign-off",
+]
+
+TIMELINESS_CONTROL_KEYS = [
+    "1. Registration & risk assessment",
+    "2. Privileged Access",
+    "5. EUC Library of Controls (CACRT)",
+    "7. Evidence & sign-off",
+    "8. Resilience",
+]
 
 
 def username_options_for_role(role: str) -> list[str]:
@@ -98,7 +149,7 @@ def add_days(days: int) -> str:
 
 
 def risk_level_from_average(avg: float) -> str:
-    """Configurable MVP scoring rule for inherent/residual risk calculation."""
+    """Legacy fallback scoring rule retained for old seed payloads and migrations."""
     if avg < 2.0:
         return "Low"
     if avg < 3.0:
@@ -108,9 +159,114 @@ def risk_level_from_average(avg: float) -> str:
     return "Very High"
 
 
+def score_to_risk_level(score: int | float | str | None) -> str:
+    try:
+        score_f = float(score or 2)
+    except (TypeError, ValueError):
+        return str(score) if score in RISK_RANK else "Medium"
+    return risk_level_from_average(score_f)
+
+
+def risk_rank(level: str | None) -> int:
+    return RISK_RANK.get(str(level or "Medium"), 2)
+
+
+def highest_risk_level(levels: list[str]) -> str:
+    return RANK_RISK.get(max(risk_rank(level) for level in levels), "Medium")
+
+
+def material_supports_bcbs239(q1: str | None, q2: str | None, q3: str | None) -> str:
+    return "Yes" if any(str(v).strip().lower() == "yes" for v in [q1, q2, q3]) else "No"
+
+
+def derive_control_effectiveness(statuses: list[str]) -> str:
+    """Replicates the workbook LET formulas for derived control effectiveness."""
+    normalized = [status if status in CONTROL_STATUSES else "Not in place" for status in statuses]
+    not_in = normalized.count("Not in place")
+    partial = normalized.count("Partially in place")
+    evidenced = normalized.count("In place and evidenced")
+    total = len(normalized)
+    if not_in >= 2:
+        return "Not in place"
+    if not_in == 1:
+        return "Weak"
+    if partial == total:
+        return "Weak"
+    if evidenced > total / 2:
+        return "Strong"
+    if evidenced >= 1:
+        return "Adequate"
+    return "Adequate"
+
+
+def residual_from_matrix(effective_inherent: str, control_effectiveness: str) -> str:
+    return RESIDUAL_RISK_MATRIX.get(effective_inherent, RESIDUAL_RISK_MATRIX["Medium"]).get(control_effectiveness, "Medium")
+
+
+def required_action_guidance(residual_risk: str) -> str:
+    if residual_risk == "Very High":
+        return "Outside tolerance: escalation and time-bound remediation required; do not operate material-report EUCs with unmitigated Very High residual risk."
+    if residual_risk == "High":
+        return "Remediation plan required with target dates; consider exception governance if temporary operation is needed."
+    if residual_risk == "Medium":
+        return "Operate with monitoring and timely remediation of gaps."
+    return "Maintain controls and reassess on change."
+
+
+def calculate_policy_risk(payload: dict[str, Any]) -> dict[str, Any]:
+    """Calculate EUC risk using the uploaded Risk Assessment workbook methodology."""
+    q1 = payload.get("materiality_q1", "No")
+    q2 = payload.get("materiality_q2", "No")
+    q3 = payload.get("materiality_q3", "No")
+    material = payload.get("materially_supports_bcbs239") or material_supports_bcbs239(q1, q2, q3)
+
+    owner_integrity = payload.get("owner_integrity_level") or score_to_risk_level(payload.get("integrity_accuracy_score"))
+    owner_timeliness = payload.get("owner_timeliness_level") or score_to_risk_level(payload.get("timeliness_availability_score"))
+    effective_integrity = "Very High" if material == "Yes" else owner_integrity
+    effective_timeliness = "Very High" if material == "Yes" else owner_timeliness
+
+    controls = payload.get("controls") or {}
+    if not isinstance(controls, dict):
+        controls = {}
+    # Backwards-compatible default: treat missing controls as in place and evidenced unless explicitly supplied.
+    control_statuses = {
+        control: controls.get(control, {}).get("status") if isinstance(controls.get(control), dict) else controls.get(control)
+        for control in BASELINE_CONTROL_AREAS
+    }
+    for control in BASELINE_CONTROL_AREAS:
+        control_statuses[control] = control_statuses.get(control) or payload.get(f"control_{BASELINE_CONTROL_AREAS.index(control) + 1}_status") or "In place and evidenced"
+
+    integrity_ce = derive_control_effectiveness([control_statuses[c] for c in INTEGRITY_CONTROL_KEYS])
+    timeliness_ce = derive_control_effectiveness([control_statuses[c] for c in TIMELINESS_CONTROL_KEYS])
+    integrity_residual = residual_from_matrix(effective_integrity, integrity_ce)
+    timeliness_residual = residual_from_matrix(effective_timeliness, timeliness_ce)
+    inherent = highest_risk_level([effective_integrity, effective_timeliness])
+    raw_residual = highest_risk_level([integrity_residual, timeliness_residual])
+    residual = raw_residual
+    # Workbook rule: material BCBS-supporting EUCs do not land below Medium residual risk.
+    if material == "Yes" and risk_rank(residual) < risk_rank("Medium"):
+        residual = "Medium"
+    return {
+        "materially_supports_bcbs239": material,
+        "owner_integrity_level": owner_integrity,
+        "owner_timeliness_level": owner_timeliness,
+        "effective_integrity_level": effective_integrity,
+        "effective_timeliness_level": effective_timeliness,
+        "integrity_control_effectiveness": integrity_ce,
+        "timeliness_control_effectiveness": timeliness_ce,
+        "integrity_residual_level": integrity_residual,
+        "timeliness_residual_level": timeliness_residual,
+        "inherent_risk": inherent,
+        "residual_risk": residual,
+        "required_action_guidance": required_action_guidance(residual),
+        "control_statuses": control_statuses,
+    }
+
+
 def generate_reference_id() -> str:
     row = fetch_one("SELECT COALESCE(MAX(euc_id), 0) + 1 AS next_id FROM eucs")
-    return f"EUC-{int(row['next_id']):06d}"
+    # The uploaded inventory workbook uses EUC.001-style references.
+    return f"EUC.{int(row['next_id']):03d}"
 
 
 def all_eucs(role: str | None = None, username: str | None = None) -> pd.DataFrame:
@@ -171,26 +327,36 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
     if errors:
         raise ValueError("\n".join(errors))
 
+    material = material_supports_bcbs239(
+        payload.get("supports_material_report"),
+        payload.get("supports_material_kri"),
+        payload.get("supports_material_model"),
+    )
     now = utc_now()
     reference_id = generate_reference_id()
     euc_id = execute(
         """
         INSERT INTO eucs(
-            reference_id, name, description, purpose, owner, owner_delegate, business_unit, technology_type,
-            storage_location, frequency, schedule, cut_off, business_context, bcbs239_output_mapping, cde_linkage,
-            inputs, outputs, recipients, dependencies, spof_indicator, inherent_risk, residual_risk,
-            overall_status, documentation_completeness_status, lifecycle_status, next_review_date,
-            industrialization_rationale, decommissioning_rationale, created_by, created_at, updated_at,
-            mapping_na_justification
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            reference_id, name, description, purpose, legal_entity, owner, owner_delegate, reviewer, business_unit,
+            technology_type, storage_location, frequency, schedule, cut_off, business_context, bcbs239_output_mapping,
+            cde_linkage, inputs, outputs, recipients, dependencies, spof_indicator, supports_material_report,
+            supports_material_kri, supports_material_model, used_by_multiple_bus, number_active_users, created_by_bu,
+            acquired_third_party, support_contract_sla, library_of_controls, last_risk_assessment,
+            exceptions_remediation_actions, industrialization_decommissioning_status, materially_supports_bcbs239,
+            materiality_rationale, inherent_risk, residual_risk, overall_status, documentation_completeness_status,
+            lifecycle_status, next_review_date, industrialization_rationale, decommissioning_rationale, created_by,
+            created_at, updated_at, mapping_na_justification
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             reference_id,
             payload.get("name"),
             payload.get("description"),
             payload.get("purpose"),
+            payload.get("legal_entity", "Eurobank S.A."),
             payload.get("owner"),
             payload.get("owner_delegate"),
+            payload.get("reviewer"),
             payload.get("business_unit"),
             payload.get("technology_type"),
             payload.get("storage_location"),
@@ -205,6 +371,20 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
             payload.get("recipients"),
             payload.get("dependencies"),
             payload.get("spof_indicator", "No"),
+            payload.get("supports_material_report", "No"),
+            payload.get("supports_material_kri", "No"),
+            payload.get("supports_material_model", "No"),
+            payload.get("used_by_multiple_bus", "No"),
+            payload.get("number_active_users"),
+            payload.get("created_by_bu", "Yes"),
+            payload.get("acquired_third_party", "No"),
+            payload.get("support_contract_sla", "No"),
+            payload.get("library_of_controls"),
+            payload.get("last_risk_assessment"),
+            payload.get("exceptions_remediation_actions"),
+            payload.get("industrialization_decommissioning_status"),
+            material,
+            payload.get("materiality_rationale"),
             payload.get("inherent_risk", "Medium"),
             payload.get("residual_risk", "Medium"),
             payload.get("overall_status", "Registered"),
@@ -223,8 +403,8 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
     create_task(
         euc_id=euc_id,
         task_type="Risk assessment",
-        title=f"Complete risk assessment for {reference_id}",
-        description="Risk assessment task generated after EUC registration.",
+        title=f"Complete policy risk assessment for {reference_id}",
+        description="Risk assessment task generated after EUC Inventory registration.",
         assigned_to=payload.get("owner"),
         assigned_role=OWNER_ROLE,
         due_date=add_days(DEFAULT_DUE_DAYS["Risk assessment"]),
@@ -244,7 +424,6 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
     )
     return euc_id
 
-
 def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
     old = get_euc(euc_id)
     if not old:
@@ -256,8 +435,10 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "name",
         "description",
         "purpose",
+        "legal_entity",
         "owner",
         "owner_delegate",
+        "reviewer",
         "business_unit",
         "technology_type",
         "storage_location",
@@ -272,6 +453,19 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "recipients",
         "dependencies",
         "spof_indicator",
+        "supports_material_report",
+        "supports_material_kri",
+        "supports_material_model",
+        "used_by_multiple_bus",
+        "number_active_users",
+        "created_by_bu",
+        "acquired_third_party",
+        "support_contract_sla",
+        "library_of_controls",
+        "last_risk_assessment",
+        "exceptions_remediation_actions",
+        "industrialization_decommissioning_status",
+        "materiality_rationale",
         "overall_status",
         "lifecycle_status",
         "next_review_date",
@@ -279,6 +473,13 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "decommissioning_rationale",
         "mapping_na_justification",
     ]
+    payload = dict(payload)
+    payload["materially_supports_bcbs239"] = material_supports_bcbs239(
+        payload.get("supports_material_report", old.get("supports_material_report")),
+        payload.get("supports_material_kri", old.get("supports_material_kri")),
+        payload.get("supports_material_model", old.get("supports_material_model")),
+    )
+    allowed_fields.append("materially_supports_bcbs239")
     assignments = ", ".join([f"{field} = ?" for field in allowed_fields])
     values = [payload.get(field, old.get(field)) for field in allowed_fields]
     values.extend([utc_now(), euc_id])
@@ -296,89 +497,163 @@ def update_euc_status(euc_id: int, lifecycle_status: str, username: str, overall
 
 
 def get_components(euc_id: int) -> pd.DataFrame:
-    return dataframe("SELECT * FROM components WHERE euc_id = ? ORDER BY component_id", (euc_id,))
+    return dataframe(
+        """
+        SELECT c.*, e.reference_id, e.name AS euc_name
+        FROM components c
+        JOIN eucs e ON e.euc_id = c.euc_id
+        WHERE c.euc_id = ?
+        ORDER BY c.component_id
+        """,
+        (euc_id,),
+    )
 
 
 def create_component(payload: dict[str, Any], username: str) -> int:
     now = utc_now()
     component_id = execute(
         """
-        INSERT INTO components(euc_id, component_name, component_type, technology, storage_location, description, criticality, owner, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO components(
+            euc_id, component_name, component_type, technology, business_unit, euc_application,
+            material_report_mapping, operationalization_document_link, storage_location, controlled_storage_type,
+            input_sources, cut_off_times, processing_schedule, execution_frequency, cde_mappings, data_outputs,
+            level_of_automation, backup_recovery_arrangements, spof_risk, modification_date, review_date,
+            description, criticality, owner, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload["euc_id"],
             payload["component_name"],
             payload["component_type"],
             payload.get("technology"),
+            payload.get("business_unit"),
+            payload.get("euc_application"),
+            payload.get("material_report_mapping"),
+            payload.get("operationalization_document_link"),
             payload.get("storage_location"),
+            payload.get("controlled_storage_type"),
+            payload.get("input_sources"),
+            payload.get("cut_off_times"),
+            payload.get("processing_schedule"),
+            payload.get("execution_frequency"),
+            payload.get("cde_mappings"),
+            payload.get("data_outputs"),
+            payload.get("level_of_automation"),
+            payload.get("backup_recovery_arrangements"),
+            payload.get("spof_risk"),
+            payload.get("modification_date"),
+            payload.get("review_date"),
             payload.get("description"),
             payload.get("criticality"),
             payload.get("owner"),
             now,
         ),
     )
-    insert_audit("Component", component_id, "CREATE", username, None, payload)
+    insert_audit("EUC Asset", component_id, "CREATE", username, None, payload)
     return component_id
-
 
 def get_risk_assessments(euc_id: int) -> pd.DataFrame:
     return dataframe("SELECT * FROM risk_assessments WHERE euc_id = ? ORDER BY version DESC", (euc_id,))
 
 
 def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
-    scores = [
-        int(payload["integrity_accuracy_score"]),
-        int(payload["timeliness_availability_score"]),
-        int(payload["complexity_score"]),
-        int(payload["business_criticality_score"]),
-    ]
-    control_effectiveness = int(payload["control_effectiveness_score"])
-    inherent_avg = sum(scores) / len(scores)
-    residual_avg = (sum(scores) + control_effectiveness) / 5
-    inherent_risk = risk_level_from_average(inherent_avg)
-    residual_risk = risk_level_from_average(residual_avg)
+    """Create a policy-style risk assessment aligned to the uploaded workbook.
+
+    The previous MVP accepted five numeric sliders. This function still accepts that
+    payload as a fallback, but the primary path now follows the workbook logic:
+    materiality questions -> effective inherent risk -> baseline controls -> residual matrix.
+    """
+    calculation = calculate_policy_risk(payload)
+    controls_payload = payload.get("controls") or {}
+    control_rows = []
+    for control in BASELINE_CONTROL_AREAS:
+        value = controls_payload.get(control, {}) if isinstance(controls_payload, dict) else {}
+        if isinstance(value, dict):
+            status = value.get("status") or calculation["control_statuses"].get(control)
+            rationale = value.get("rationale")
+        else:
+            status = value or calculation["control_statuses"].get(control)
+            rationale = None
+        control_rows.append(
+            {
+                "control_area": control,
+                "status": status,
+                "meaning": CONTROL_DEFAULT_MEANINGS.get(control),
+                "rationale": rationale,
+            }
+        )
+
     row = fetch_one("SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM risk_assessments WHERE euc_id = ?", (payload["euc_id"],))
     version = int(row["next_version"])
     now = utc_now()
     assessment_id = execute(
         """
         INSERT INTO risk_assessments(
-            euc_id, assessment_date, assessed_by, integrity_accuracy_score, timeliness_availability_score,
+            euc_id, assessment_date, assessed_by, assessment_type, materiality_q1, materiality_q2, materiality_q3,
+            materially_supports_bcbs239, owner_integrity_level, owner_timeliness_level, effective_integrity_level,
+            effective_timeliness_level, integrity_control_effectiveness, timeliness_control_effectiveness,
+            integrity_residual_level, timeliness_residual_level, integrity_rationale, timeliness_rationale,
+            control_assessment_json, required_action_guidance, integrity_accuracy_score, timeliness_availability_score,
             complexity_score, business_criticality_score, control_effectiveness_score, inherent_risk, residual_risk,
             rationale, trigger_type, version, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload["euc_id"],
             payload.get("assessment_date", date.today().isoformat()),
             payload.get("assessed_by", username),
-            scores[0],
-            scores[1],
-            scores[2],
-            scores[3],
-            control_effectiveness,
-            inherent_risk,
-            residual_risk,
+            payload.get("assessment_type") or payload.get("trigger_type", "Manual trigger"),
+            payload.get("materiality_q1", "No"),
+            payload.get("materiality_q2", "No"),
+            payload.get("materiality_q3", "No"),
+            calculation["materially_supports_bcbs239"],
+            calculation["owner_integrity_level"],
+            calculation["owner_timeliness_level"],
+            calculation["effective_integrity_level"],
+            calculation["effective_timeliness_level"],
+            calculation["integrity_control_effectiveness"],
+            calculation["timeliness_control_effectiveness"],
+            calculation["integrity_residual_level"],
+            calculation["timeliness_residual_level"],
+            payload.get("integrity_rationale"),
+            payload.get("timeliness_rationale"),
+            json.dumps(control_rows, ensure_ascii=False),
+            calculation["required_action_guidance"],
+            risk_rank(calculation["effective_integrity_level"]),
+            risk_rank(calculation["effective_timeliness_level"]),
+            risk_rank(calculation["inherent_risk"]),
+            risk_rank(calculation["inherent_risk"]),
+            max(CONTROL_EFFECTIVENESS_RANK.get(calculation["integrity_control_effectiveness"], 2), CONTROL_EFFECTIVENESS_RANK.get(calculation["timeliness_control_effectiveness"], 2)),
+            calculation["inherent_risk"],
+            calculation["residual_risk"],
             payload.get("rationale"),
-            payload.get("trigger_type", "Manual trigger"),
+            payload.get("trigger_type") or payload.get("assessment_type", "Manual trigger"),
             version,
             now,
         ),
     )
-    lifecycle = "Awaiting Documentation" if residual_risk in {"Low", "Medium", "High", "Very High"} else "Registered"
+    lifecycle = "Awaiting Documentation" if calculation["residual_risk"] in {"Low", "Medium", "High", "Very High"} else "Registered"
     execute(
         """
         UPDATE eucs
-        SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?, updated_at = ?
+        SET inherent_risk = ?, residual_risk = ?, materially_supports_bcbs239 = ?, lifecycle_status = ?, overall_status = ?,
+            last_risk_assessment = ?, updated_at = ?
         WHERE euc_id = ?
         """,
-        (inherent_risk, residual_risk, lifecycle, lifecycle, utc_now(), payload["euc_id"]),
+        (
+            calculation["inherent_risk"],
+            calculation["residual_risk"],
+            calculation["materially_supports_bcbs239"],
+            lifecycle,
+            lifecycle,
+            payload.get("assessment_date", date.today().isoformat()),
+            utc_now(),
+            payload["euc_id"],
+        ),
     )
-    insert_audit("Risk Assessment", assessment_id, "CREATE", username, None, {**payload, "inherent_risk": inherent_risk, "residual_risk": residual_risk})
+    insert_audit("Risk Assessment", assessment_id, "CREATE", username, None, {**payload, **calculation})
     evaluate_and_update_completeness(payload["euc_id"], username, create_missing_tasks=True)
     return assessment_id
-
 
 def safe_filename(filename: str) -> str:
     stem = Path(filename).stem[:80]

@@ -14,21 +14,28 @@ import services as svc
 from db import DATABASE_FILE, init_db, table_count
 from schema import (
     APP_TITLE,
+    AUTOMATION_LEVELS,
     BANK_NAME,
+    BASELINE_CONTROL_AREAS,
+    BCBS_MATERIALITY_QUESTIONS,
     APPROVAL_STATUSES,
     CACRT_DIMENSIONS,
     CHANGE_TYPES,
     CONTROL_AREAS,
+    CONTROL_STATUSES,
+    CONTROL_STORAGE_TYPES,
     DOCUMENT_STATUSES,
     DOCUMENT_TYPES,
     FINDING_SEVERITIES,
     FREQUENCIES,
     INCIDENT_STATUSES,
+    LEGAL_ENTITIES,
     LIFECYCLE_STATUSES,
     OVERALL_STATUSES,
     PRIORITIES,
     REVIEW_OUTCOMES,
     REVIEW_TYPES,
+    RISK_ASSESSMENT_TYPES,
     RISK_LEVELS,
     ROLES,
     TASK_STATUSES,
@@ -108,7 +115,11 @@ def safe_df(df: pd.DataFrame, height: int | None = None) -> None:
     if df is None or df.empty:
         st.info("No records found for the current filters.")
     else:
-        st.dataframe(df, use_container_width=True, hide_index=True, height=height)
+        kwargs = {"use_container_width": True, "hide_index": True}
+        # Streamlit 1.50+ rejects height=None, so pass height only when explicitly set.
+        if height is not None:
+            kwargs["height"] = height
+        st.dataframe(df, **kwargs)
 
 
 def csv_download(df: pd.DataFrame, file_name: str, label: str = "Download CSV") -> None:
@@ -233,7 +244,13 @@ def page_inventory() -> None:
         filtered = filtered[filtered["residual_risk"] == risk]
     if status != "All":
         filtered = filtered[filtered["lifecycle_status"] == status]
-    show_cols = ["euc_id", "reference_id", "name", "owner", "business_unit", "technology_type", "residual_risk", "lifecycle_status", "documentation_completeness_status", "spof_indicator", "next_review_date"]
+    show_cols = [
+        "euc_id", "reference_id", "name", "purpose", "legal_entity", "business_unit", "owner", "reviewer",
+        "supports_material_report", "supports_material_kri", "supports_material_model", "materially_supports_bcbs239",
+        "used_by_multiple_bus", "number_active_users", "technology_type", "residual_risk", "lifecycle_status",
+        "documentation_completeness_status", "spof_indicator", "next_review_date",
+    ]
+    show_cols = [c for c in show_cols if c in filtered.columns]
     safe_df(filtered[show_cols], height=500)
     csv_download(filtered[show_cols], "euc_inventory.csv")
     if not filtered.empty:
@@ -253,34 +270,69 @@ def page_register() -> None:
     if not require_write_access():
         return
 
+    st.caption("Registration mirrors the uploaded EUC Inventory workbook and can optionally create the first linked EUC Asset Inventory row.")
     with st.form("register_euc"):
-        st.subheader("Core EUC information")
-        c1, c2 = st.columns(2)
-        name = c1.text_input("EUC name *")
-        owner = c2.text_input("Owner *", value=username if role == svc.OWNER_ROLE else "")
-        owner_delegate = c1.text_input("Owner delegate / contributor")
-        business_unit = c2.text_input("Business unit *", value="Risk Management")
-        technology_type = c1.selectbox("Technology type *", TECHNOLOGY_TYPES)
-        storage_location = c2.text_input("Storage location *", value="//eurobank/euc/")
-        description = st.text_area("Description")
-        purpose = st.text_area("Purpose")
+        st.subheader("EUC Inventory master record")
+        c1, c2, c3 = st.columns(3)
+        name = c1.text_input("EUC Application Name *")
+        legal_entity = c2.selectbox("Legal Entity *", LEGAL_ENTITIES)
+        business_unit = c3.text_input("Business Unit *", value="Eurobank Research")
+        owner = c1.text_input("Owner *", value=username if role == svc.OWNER_ROLE else "")
+        owner_delegate = c2.text_input("Owner Delegate / Contributor")
+        reviewer = c3.text_input("Reviewer")
+        purpose = st.text_area("EUC Purpose *", help="Corresponds to the EUC Puprose/Purpose column in the workbook.")
+        description = st.text_area("Description / business context")
 
-        st.subheader("Mapping and operating context")
-        c3, c4, c5 = st.columns(3)
-        frequency = c3.selectbox("Frequency", FREQUENCIES)
-        schedule = c4.text_input("Execution schedule")
-        cut_off = c5.text_input("Cut-off")
-        business_context = st.text_area("Business context")
-        bcbs_mapping = st.text_area("BCBS 239 output mapping *", help="At least one in-scope output is required.")
-        cde_linkage = st.text_area("CDE linkage (optional)")
-        inputs = st.text_area("Inputs")
-        outputs = st.text_area("Outputs")
+        st.subheader("BCBS 239 and materiality flags")
+        c4, c5, c6 = st.columns(3)
+        supports_material_report = c4.selectbox("Supports Material Report in scope under Policy 241?", ["Yes", "No"], index=0)
+        supports_material_kri = c5.selectbox("Supports Material KRI in scope under Policy 241?", ["Yes", "No"], index=1)
+        supports_material_model = c6.selectbox("Supports Material Model in scope under Policy 241?", ["Yes", "No"], index=1)
+        bcbs_mapping = st.text_area("RRF Material Report / Material KRI / Material Model mapping *", help="At least one BCBS 239 in-scope output must be mapped.")
+        materiality_rationale = st.text_area("Materiality rationale / mapping notes")
+
+        st.subheader("Usage, sourcing, and support")
+        c7, c8, c9 = st.columns(3)
+        used_by_multiple_bus = c7.selectbox("In use by two or more distinct BUs?", ["No", "Yes"])
+        number_active_users = c8.text_input("Number of Active Users", placeholder="e.g., 1, 2+, 10")
+        created_by_bu = c9.selectbox("Created by the BU?", ["Yes", "No"])
+        acquired_third_party = c7.selectbox("Acquired by third-party / COTS?", ["No", "Yes"])
+        support_contract_sla = c8.selectbox("Support contract or SLA in place?", ["No", "Yes"])
+        library_of_controls = c9.text_input("Library of Controls link / reference")
+
+        st.subheader("Operating context")
+        c10, c11, c12 = st.columns(3)
+        technology_type = c10.selectbox("Primary Technology Type *", TECHNOLOGY_TYPES)
+        frequency = c11.selectbox("Execution Frequency", FREQUENCIES)
+        schedule = c12.text_input("Processing Schedule / Execution Window")
+        cut_off = c10.text_input("Cut-off times")
+        storage_location = c11.text_input("Controlled Storage Location *", value="SharePoint Server / EUC Library")
+        spof = c12.selectbox("Single Point of Failure (SPOF) risk", ["No", "Yes"])
+        cde_linkage = st.text_area("CDE Mappings / linkage (optional)")
+        inputs = st.text_area("Input sources (systems/files/APIs)")
+        outputs = st.text_area("Data Outputs / Produced Files / Reports")
         recipients = st.text_area("Recipients")
         dependencies = st.text_area("Dependencies")
-        spof = st.radio("SPOF indicator", ["No", "Yes"], horizontal=True)
-        mapping_na_justification = st.text_area("Not Applicable justification", help="Required if any mapping field is 'Not Applicable'.")
-        lifecycle_status = st.selectbox("Initial lifecycle status", ["Draft", "Submitted", "Registered"], index=2)
-        next_review_date = st.date_input("Next review date", value=date.today() + timedelta(days=90))
+        mapping_na_justification = st.text_area("Not Applicable justification", help="Required if any mapping field is exactly 'Not Applicable'.")
+
+        st.subheader("Review and lifecycle")
+        c13, c14, c15 = st.columns(3)
+        last_risk_assessment = c13.date_input("Last Risk Assessment", value=date.today())
+        next_review_date = c14.date_input("Next Risk Assessment / Review Date", value=date.today() + timedelta(days=90))
+        lifecycle_status = c15.selectbox("Initial lifecycle status", ["Draft", "Submitted", "Registered"], index=2)
+        exceptions_remediation_actions = st.text_area("Exceptions / Remediation actions")
+        industrialization_decommissioning_status = st.text_input("Industrialization / Decommissioning Status")
+
+        st.subheader("Optional first linked EUC Asset Inventory row")
+        add_initial_asset = st.checkbox("Create initial asset/component with this EUC", value=True)
+        a1, a2, a3 = st.columns(3)
+        asset_name = a1.text_input("Files / Asset name", placeholder="e.g., workbook, SQL script, notebook")
+        file_description = st.text_area("File description")
+        asset_mapping = st.text_area("Asset-level RRF Material Report / KRI / Model Mapping")
+        operationalization_link = st.text_input("Operationalization Document Link")
+        controlled_storage_type = a2.selectbox("Controlled Storage Type", CONTROL_STORAGE_TYPES)
+        level_of_automation = a3.selectbox("Level of Automation", AUTOMATION_LEVELS)
+        backup_recovery = st.text_area("Backup / Recovery Arrangements")
         submitted = st.form_submit_button("Register EUC")
 
     if submitted:
@@ -291,15 +343,17 @@ def page_register() -> None:
                     "name": name,
                     "description": description,
                     "purpose": purpose,
+                    "legal_entity": legal_entity,
                     "owner": owner,
                     "owner_delegate": owner_delegate,
+                    "reviewer": reviewer,
                     "business_unit": business_unit,
                     "technology_type": technology_type,
                     "storage_location": storage_location,
                     "frequency": frequency,
                     "schedule": schedule,
                     "cut_off": cut_off,
-                    "business_context": business_context,
+                    "business_context": description,
                     "bcbs239_output_mapping": bcbs_mapping,
                     "cde_linkage": cde_linkage,
                     "inputs": inputs,
@@ -307,6 +361,19 @@ def page_register() -> None:
                     "recipients": recipients,
                     "dependencies": dependencies,
                     "spof_indicator": spof,
+                    "supports_material_report": supports_material_report,
+                    "supports_material_kri": supports_material_kri,
+                    "supports_material_model": supports_material_model,
+                    "used_by_multiple_bus": used_by_multiple_bus,
+                    "number_active_users": number_active_users,
+                    "created_by_bu": created_by_bu,
+                    "acquired_third_party": acquired_third_party,
+                    "support_contract_sla": support_contract_sla,
+                    "library_of_controls": library_of_controls,
+                    "last_risk_assessment": last_risk_assessment.isoformat() if last_risk_assessment else None,
+                    "exceptions_remediation_actions": exceptions_remediation_actions,
+                    "industrialization_decommissioning_status": industrialization_decommissioning_status,
+                    "materiality_rationale": materiality_rationale,
                     "lifecycle_status": lifecycle_status,
                     "overall_status": lifecycle_status,
                     "next_review_date": next_review_date.isoformat(),
@@ -314,14 +381,43 @@ def page_register() -> None:
                 },
                 username,
             )
+            if add_initial_asset and asset_name.strip():
+                svc.create_component(
+                    {
+                        "euc_id": euc_id,
+                        "component_name": asset_name.strip(),
+                        "component_type": technology_type,
+                        "technology": technology_type,
+                        "business_unit": business_unit,
+                        "euc_application": name,
+                        "material_report_mapping": asset_mapping or bcbs_mapping,
+                        "operationalization_document_link": operationalization_link,
+                        "storage_location": storage_location,
+                        "controlled_storage_type": controlled_storage_type,
+                        "input_sources": inputs,
+                        "cut_off_times": cut_off,
+                        "processing_schedule": schedule,
+                        "execution_frequency": frequency,
+                        "cde_mappings": cde_linkage,
+                        "data_outputs": outputs,
+                        "level_of_automation": level_of_automation,
+                        "backup_recovery_arrangements": backup_recovery,
+                        "spof_risk": spof,
+                        "modification_date": date.today().isoformat(),
+                        "review_date": next_review_date.isoformat(),
+                        "description": file_description,
+                        "criticality": "High" if supports_material_report == "Yes" else "Medium",
+                        "owner": owner,
+                    },
+                    username,
+                )
             st.session_state["selected_euc_id"] = euc_id
-            st.success("EUC registered and initial risk assessment/document submission tasks created.")
+            st.success("EUC Inventory record registered and linked asset/risk-documentation tasks created.")
             if not duplicates.empty:
                 st.warning("Potential duplicates detected. Review before continuing.")
                 safe_df(duplicates)
         except ValueError as exc:
             st.error(str(exc))
-
 
 def page_detail() -> None:
     st.title("EUC Detail View")
@@ -336,27 +432,40 @@ def page_detail() -> None:
     c3.markdown(f"**Lifecycle:** {badge(euc['lifecycle_status'])}")
     c4.markdown(f"**Docs:** {badge(euc['documentation_completeness_status'])}")
 
-    tabs = st.tabs(["Overview", "Mapping", "Components", "Risk History", "Evidence", "Tasks", "Reviews", "Audit"])
+    tabs = st.tabs(["Overview", "EUC Inventory Fields", "Mapping", "EUC Asset Inventory", "Risk History", "Evidence", "Tasks", "Reviews", "Audit"])
     with tabs[0]:
         st.write(euc.get("description") or "No description recorded.")
-        st.json({k: euc.get(k) for k in ["purpose", "business_unit", "technology_type", "storage_location", "frequency", "schedule", "cut_off", "spof_indicator", "next_review_date"]})
+        summary_fields = [
+            "purpose", "legal_entity", "business_unit", "technology_type", "storage_location", "frequency",
+            "schedule", "cut_off", "spof_indicator", "last_risk_assessment", "next_review_date",
+            "materially_supports_bcbs239",
+        ]
+        st.json({k: euc.get(k) for k in summary_fields if k in euc})
         if svc.can_edit_euc(role, username, euc):
             with st.expander("Edit EUC summary and lifecycle"):
                 with st.form("edit_euc"):
-                    name = st.text_input("Name", value=euc.get("name") or "")
-                    owner = st.text_input("Owner", value=euc.get("owner") or "")
-                    delegate = st.text_input("Owner delegate", value=euc.get("owner_delegate") or "")
-                    unit = st.text_input("Business unit", value=euc.get("business_unit") or "")
-                    tech = st.selectbox("Technology", TECHNOLOGY_TYPES, index=option_index(TECHNOLOGY_TYPES, euc.get("technology_type")))
-                    storage = st.text_input("Storage location", value=euc.get("storage_location") or "")
-                    lifecycle = st.selectbox("Lifecycle status", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, euc.get("lifecycle_status")))
-                    overall = st.selectbox("Overall status", OVERALL_STATUSES, index=option_index(OVERALL_STATUSES, euc.get("overall_status")))
-                    next_review = st.date_input("Next review date", value=pd.to_datetime(euc.get("next_review_date") or date.today()).date())
+                    c1, c2, c3 = st.columns(3)
+                    name = c1.text_input("Name", value=euc.get("name") or "")
+                    legal_entity = c2.selectbox("Legal entity", LEGAL_ENTITIES, index=option_index(LEGAL_ENTITIES, euc.get("legal_entity")))
+                    unit = c3.text_input("Business unit", value=euc.get("business_unit") or "")
+                    owner = c1.text_input("Owner", value=euc.get("owner") or "")
+                    delegate = c2.text_input("Owner delegate", value=euc.get("owner_delegate") or "")
+                    reviewer = c3.text_input("Reviewer", value=euc.get("reviewer") or "")
+                    tech = c1.selectbox("Technology", TECHNOLOGY_TYPES, index=option_index(TECHNOLOGY_TYPES, euc.get("technology_type")))
+                    storage = c2.text_input("Storage location", value=euc.get("storage_location") or "")
+                    lifecycle = c3.selectbox("Lifecycle status", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, euc.get("lifecycle_status")))
+                    overall = c1.selectbox("Overall status", OVERALL_STATUSES, index=option_index(OVERALL_STATUSES, euc.get("overall_status")))
+                    next_review = c2.date_input("Next review date", value=pd.to_datetime(euc.get("next_review_date") or date.today()).date())
                     description = st.text_area("Description", value=euc.get("description") or "")
                     purpose = st.text_area("Purpose", value=euc.get("purpose") or "")
                     if st.form_submit_button("Save changes"):
                         payload = dict(euc)
-                        payload.update({"name": name, "owner": owner, "owner_delegate": delegate, "business_unit": unit, "technology_type": tech, "storage_location": storage, "lifecycle_status": lifecycle, "overall_status": overall, "next_review_date": next_review.isoformat(), "description": description, "purpose": purpose})
+                        payload.update({
+                            "name": name, "legal_entity": legal_entity, "owner": owner, "owner_delegate": delegate,
+                            "reviewer": reviewer, "business_unit": unit, "technology_type": tech, "storage_location": storage,
+                            "lifecycle_status": lifecycle, "overall_status": overall, "next_review_date": next_review.isoformat(),
+                            "description": description, "purpose": purpose,
+                        })
                         try:
                             svc.update_euc(euc["euc_id"], payload, username)
                             st.success("EUC updated.")
@@ -364,12 +473,44 @@ def page_detail() -> None:
                         except ValueError as exc:
                             st.error(str(exc))
     with tabs[1]:
-        st.json({k: euc.get(k) for k in ["business_context", "bcbs239_output_mapping", "cde_linkage", "inputs", "outputs", "recipients", "dependencies", "mapping_na_justification"]})
+        inventory_fields = [
+            "reference_id", "name", "purpose", "legal_entity", "business_unit", "owner", "reviewer",
+            "supports_material_report", "supports_material_kri", "supports_material_model", "used_by_multiple_bus",
+            "number_active_users", "created_by_bu", "acquired_third_party", "support_contract_sla",
+            "library_of_controls", "last_risk_assessment", "next_review_date", "exceptions_remediation_actions",
+            "industrialization_decommissioning_status", "inherent_risk", "residual_risk",
+        ]
+        st.json({k: euc.get(k) for k in inventory_fields if k in euc})
+        if svc.can_edit_euc(role, username, euc):
+            with st.expander("Edit EUC Inventory workbook fields"):
+                with st.form("edit_inventory_workbook_fields"):
+                    payload = dict(euc)
+                    c1, c2, c3 = st.columns(3)
+                    payload["supports_material_report"] = c1.selectbox("Supports Material Report?", ["Yes", "No"], index=option_index(["Yes", "No"], euc.get("supports_material_report")))
+                    payload["supports_material_kri"] = c2.selectbox("Supports Material KRI?", ["Yes", "No"], index=option_index(["Yes", "No"], euc.get("supports_material_kri")))
+                    payload["supports_material_model"] = c3.selectbox("Supports Material Model?", ["Yes", "No"], index=option_index(["Yes", "No"], euc.get("supports_material_model")))
+                    payload["used_by_multiple_bus"] = c1.selectbox("Two or more distinct BUs?", ["No", "Yes"], index=option_index(["No", "Yes"], euc.get("used_by_multiple_bus")))
+                    payload["number_active_users"] = c2.text_input("Number of Active Users", value=euc.get("number_active_users") or "")
+                    payload["created_by_bu"] = c3.selectbox("Created by BU?", ["Yes", "No"], index=option_index(["Yes", "No"], euc.get("created_by_bu")))
+                    payload["acquired_third_party"] = c1.selectbox("Third-party / COTS?", ["No", "Yes"], index=option_index(["No", "Yes"], euc.get("acquired_third_party")))
+                    payload["support_contract_sla"] = c2.selectbox("Support contract / SLA?", ["No", "Yes"], index=option_index(["No", "Yes"], euc.get("support_contract_sla")))
+                    payload["library_of_controls"] = c3.text_input("Library of Controls", value=euc.get("library_of_controls") or "")
+                    payload["exceptions_remediation_actions"] = st.text_area("Exceptions / Remediation actions", value=euc.get("exceptions_remediation_actions") or "")
+                    payload["industrialization_decommissioning_status"] = st.text_input("Industrialization / Decommissioning Status", value=euc.get("industrialization_decommissioning_status") or "")
+                    if st.form_submit_button("Save EUC Inventory fields"):
+                        try:
+                            svc.update_euc(euc["euc_id"], payload, username)
+                            st.success("Inventory fields updated.")
+                            rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
+    with tabs[2]:
+        st.json({k: euc.get(k) for k in ["business_context", "bcbs239_output_mapping", "cde_linkage", "inputs", "outputs", "recipients", "dependencies", "mapping_na_justification", "materiality_rationale"]})
         if svc.can_edit_euc(role, username, euc):
             with st.expander("Edit mapping fields"):
                 with st.form("edit_mapping"):
                     payload = dict(euc)
-                    for field in ["business_context", "bcbs239_output_mapping", "cde_linkage", "inputs", "outputs", "recipients", "dependencies", "mapping_na_justification"]:
+                    for field in ["business_context", "bcbs239_output_mapping", "cde_linkage", "inputs", "outputs", "recipients", "dependencies", "mapping_na_justification", "materiality_rationale"]:
                         payload[field] = st.text_area(field.replace("_", " ").title(), value=euc.get(field) or "")
                     if st.form_submit_button("Save mapping"):
                         try:
@@ -378,51 +519,102 @@ def page_detail() -> None:
                             rerun()
                         except ValueError as exc:
                             st.error(str(exc))
-    with tabs[2]:
-        safe_df(svc.get_components(euc["euc_id"]))
     with tabs[3]:
-        safe_df(svc.get_risk_assessments(euc["euc_id"]))
+        safe_df(svc.get_components(euc["euc_id"]))
     with tabs[4]:
-        safe_df(svc.get_documents(euc["euc_id"]))
+        safe_df(svc.get_risk_assessments(euc["euc_id"]))
     with tabs[5]:
+        safe_df(svc.get_documents(euc["euc_id"]))
+    with tabs[6]:
         tasks = svc.get_tasks(open_only=False)
         if not tasks.empty:
             tasks = tasks[tasks["euc_id"] == euc["euc_id"]]
         safe_df(tasks)
-    with tabs[6]:
-        safe_df(svc.get_reviews(euc["euc_id"]))
     with tabs[7]:
+        safe_df(svc.get_reviews(euc["euc_id"]))
+    with tabs[8]:
         safe_df(svc.audit_trail({"entity_type": "EUC", "entity_id": euc["euc_id"]}), height=350)
 
-
 def page_components() -> None:
-    st.title("Components / Assets")
+    st.title("Components / EUC Asset Inventory")
     username, role = current_user()
     euc = euc_selector()
     if not euc:
         return
-    safe_df(svc.get_components(euc["euc_id"]), height=350)
+    st.caption("Each asset row is explicitly linked to the selected EUC through euc_id and mirrors the uploaded EUC Asset Inventory workbook.")
+    assets = svc.get_components(euc["euc_id"])
+    preferred_cols = [
+        "component_id", "reference_id", "euc_name", "business_unit", "component_name", "description", "technology",
+        "controlled_storage_type", "storage_location", "input_sources", "cut_off_times", "processing_schedule",
+        "execution_frequency", "cde_mappings", "data_outputs", "level_of_automation", "backup_recovery_arrangements",
+        "spof_risk", "modification_date", "review_date", "owner",
+    ]
+    safe_df(assets[[c for c in preferred_cols if c in assets.columns]] if not assets.empty else assets, height=350)
     if not svc.can_edit_euc(role, username, euc):
-        st.info("You can view components but cannot add components for this EUC in the current role.")
+        st.info("You can view assets but cannot add assets for this EUC in the current role.")
         return
     with st.form("add_component"):
-        st.subheader("Add component")
-        c1, c2 = st.columns(2)
-        component_name = c1.text_input("Component name *")
-        component_type = c2.selectbox("Component type *", TECHNOLOGY_TYPES)
-        technology = c1.text_input("Technology", value=euc.get("technology_type") or "")
-        storage_location = c2.text_input("Storage location", value=euc.get("storage_location") or "")
-        criticality = c1.selectbox("Criticality", ["Low", "Medium", "High", "Critical"])
-        owner = c2.text_input("Owner", value=euc.get("owner") or username)
-        description = st.text_area("Description")
-        if st.form_submit_button("Add component"):
+        st.subheader("Add EUC Asset Inventory row")
+        c1, c2, c3 = st.columns(3)
+        component_name = c1.text_input("Files / Asset name *")
+        component_type = c2.selectbox("Component / technology type *", TECHNOLOGY_TYPES, index=option_index(TECHNOLOGY_TYPES, euc.get("technology_type")))
+        technology = c3.text_input("Technology", value=euc.get("technology_type") or "")
+        material_mapping = st.text_area("RRF Material Report, Material Report/KRI/Model Mapping", value=euc.get("bcbs239_output_mapping") or "")
+        operationalization_link = st.text_input("Operationalization Document Link")
+        description = st.text_area("File description")
+        c4, c5, c6 = st.columns(3)
+        controlled_storage_type = c4.selectbox("Controlled Storage Type", CONTROL_STORAGE_TYPES)
+        storage_location = c5.text_input("Controlled Storage Location", value=euc.get("storage_location") or "")
+        level_of_automation = c6.selectbox("Level of Automation", AUTOMATION_LEVELS)
+        input_sources = st.text_area("Input sources (systems/files/APIs)", value=euc.get("inputs") or "")
+        c7, c8, c9 = st.columns(3)
+        cut_off_times = c7.text_input("Cut-off times", value=euc.get("cut_off") or "")
+        processing_schedule = c8.text_input("Processing Schedule / Execution Window", value=euc.get("schedule") or "")
+        execution_frequency = c9.selectbox("Execution Frequency", FREQUENCIES, index=option_index(FREQUENCIES, euc.get("frequency")))
+        cde_mappings = st.text_area("CDE Mappings", value=euc.get("cde_linkage") or "")
+        data_outputs = st.text_area("Data Outputs / Produced Files / Reports", value=euc.get("outputs") or "")
+        backup = st.text_area("Backup / Recovery Arrangements")
+        c10, c11, c12, c13 = st.columns(4)
+        spof_risk = c10.selectbox("Single Point of Failure (SPOF) risk", ["No", "Yes"], index=option_index(["No", "Yes"], euc.get("spof_indicator")))
+        criticality = c11.selectbox("Criticality", ["Low", "Medium", "High", "Critical"], index=2 if euc.get("residual_risk") in {"High", "Very High"} else 1)
+        owner = c12.text_input("Asset Owner", value=euc.get("owner") or username)
+        review_date = c13.date_input("Review Date", value=pd.to_datetime(euc.get("next_review_date") or date.today()).date())
+        modification_date = st.date_input("Modification Date", value=date.today())
+        if st.form_submit_button("Add asset"):
             if not component_name:
-                st.error("Component name is required.")
+                st.error("Files / Asset name is required.")
             else:
-                svc.create_component({"euc_id": euc["euc_id"], "component_name": component_name, "component_type": component_type, "technology": technology, "storage_location": storage_location, "criticality": criticality, "owner": owner, "description": description}, username)
-                st.success("Component added.")
+                svc.create_component(
+                    {
+                        "euc_id": euc["euc_id"],
+                        "component_name": component_name,
+                        "component_type": component_type,
+                        "technology": technology,
+                        "business_unit": euc.get("business_unit"),
+                        "euc_application": euc.get("name"),
+                        "material_report_mapping": material_mapping,
+                        "operationalization_document_link": operationalization_link,
+                        "storage_location": storage_location,
+                        "controlled_storage_type": controlled_storage_type,
+                        "input_sources": input_sources,
+                        "cut_off_times": cut_off_times,
+                        "processing_schedule": processing_schedule,
+                        "execution_frequency": execution_frequency,
+                        "cde_mappings": cde_mappings,
+                        "data_outputs": data_outputs,
+                        "level_of_automation": level_of_automation,
+                        "backup_recovery_arrangements": backup,
+                        "spof_risk": spof_risk,
+                        "modification_date": modification_date.isoformat(),
+                        "review_date": review_date.isoformat(),
+                        "criticality": criticality,
+                        "owner": owner,
+                        "description": description,
+                    },
+                    username,
+                )
+                st.success("EUC asset row added and linked to the selected EUC.")
                 rerun()
-
 
 def page_risk_assessment() -> None:
     st.title("Risk Assessment")
@@ -430,25 +622,83 @@ def page_risk_assessment() -> None:
     euc = euc_selector()
     if not euc:
         return
-    st.info("Risk levels use the MVP rule: average score 1.0–1.9 Low, 2.0–2.9 Medium, 3.0–3.9 High, 4.0–5.0 Very High.")
-    safe_df(svc.get_risk_assessments(euc["euc_id"]), height=260)
+    st.info("This page implements the uploaded EUC Risk Assessment workbook: materiality questions, two inherent risk dimensions, eight baseline controls, derived control effectiveness, and the residual-risk matrix.")
+    assessments = svc.get_risk_assessments(euc["euc_id"])
+    display_cols = [
+        "assessment_id", "version", "assessment_date", "assessed_by", "assessment_type",
+        "materially_supports_bcbs239", "owner_integrity_level", "owner_timeliness_level",
+        "effective_integrity_level", "effective_timeliness_level", "integrity_control_effectiveness",
+        "timeliness_control_effectiveness", "integrity_residual_level", "timeliness_residual_level",
+        "inherent_risk", "residual_risk", "required_action_guidance",
+    ]
+    safe_df(assessments[[c for c in display_cols if c in assessments.columns]] if not assessments.empty else assessments, height=280)
     if not svc.can_edit_euc(role, username, euc) and role not in {svc.ADMIN_ROLE, svc.GCC_ROLE}:
         st.warning("Only the EUC owner/delegate or governance roles can record assessments.")
         return
-    with st.form("risk_assessment"):
-        c1, c2, c3, c4, c5 = st.columns(5)
-        integrity = c1.slider("Integrity / accuracy", 1, 5, 3)
-        timeliness = c2.slider("Timeliness / availability", 1, 5, 3)
-        complexity = c3.slider("Complexity", 1, 5, 3)
-        criticality = c4.slider("Business criticality", 1, 5, 3)
-        controls = c5.slider("Control effectiveness", 1, 5, 3, help="Higher means weaker controls / greater residual concern in this MVP scoring convention.")
-        trigger = st.selectbox("Trigger type", ["Material change", "Incident", "Periodic review", "Manual trigger"])
-        rationale = st.text_area("Rationale")
-        if st.form_submit_button("Submit assessment"):
-            assessment_id = svc.create_risk_assessment({"euc_id": euc["euc_id"], "assessment_date": date.today().isoformat(), "assessed_by": username, "integrity_accuracy_score": integrity, "timeliness_availability_score": timeliness, "complexity_score": complexity, "business_criticality_score": criticality, "control_effectiveness_score": controls, "trigger_type": trigger, "rationale": rationale}, username)
-            st.success(f"Assessment {assessment_id} submitted and EUC risk/completeness recalculated.")
-            rerun()
 
+    with st.form("risk_assessment"):
+        st.subheader("Assessment header")
+        c1, c2, c3 = st.columns(3)
+        assessment_type = c1.selectbox("Assessment Type", RISK_ASSESSMENT_TYPES)
+        assessment_date = c2.date_input("Assessment Date", value=date.today())
+        assessed_by = c3.text_input("Assessed by", value=username)
+
+        st.subheader("BCBS 239 materiality assessment")
+        default_material = "Yes" if euc.get("materially_supports_bcbs239") == "Yes" or euc.get("supports_material_report") == "Yes" else "No"
+        q1 = st.selectbox(BCBS_MATERIALITY_QUESTIONS[0], ["Yes", "No"], index=option_index(["Yes", "No"], default_material))
+        q2 = st.selectbox(BCBS_MATERIALITY_QUESTIONS[1], ["Yes", "No"], index=option_index(["Yes", "No"], "Yes" if euc.get("supports_material_kri") == "Yes" else "No"))
+        q3 = st.selectbox(BCBS_MATERIALITY_QUESTIONS[2], ["Yes", "No"], index=option_index(["Yes", "No"], euc.get("spof_indicator") or "No"))
+        st.caption("If any answer is Yes, the effective inherent risk for both dimensions is forced to Very High, matching the workbook.")
+
+        st.subheader("Inherent risk by dimension")
+        c4, c5 = st.columns(2)
+        owner_integrity = c4.selectbox("Owner inherent level — Integrity / Accuracy", RISK_LEVELS, index=option_index(RISK_LEVELS, euc.get("inherent_risk") or "Medium"))
+        owner_timeliness = c5.selectbox("Owner inherent level — Timeliness / Availability", RISK_LEVELS, index=option_index(RISK_LEVELS, euc.get("inherent_risk") or "Medium"))
+        integrity_rationale = c4.text_area("Integrity / Accuracy rationale")
+        timeliness_rationale = c5.text_area("Timeliness / Availability rationale")
+
+        st.subheader("Baseline control assessment")
+        st.caption("Control effectiveness is derived automatically using the workbook formula: multiple missing controls drive Not in place/Weak; evidenced controls drive Adequate/Strong.")
+        controls = {}
+        default_by_control = {
+            "1. Registration & risk assessment": "In place and evidenced",
+            "2. Privileged Access": "Partially in place",
+            "3. Versioning & change log": "In place and evidenced",
+            "4. Checks & reconciliations": "In place and evidenced",
+            "5. EUC Library of Controls (CACRT)": "In place and evidenced" if euc.get("residual_risk") in {"High", "Very High"} else "N/A",
+            "6. Operating Procedure": "In place and evidenced",
+            "7. Evidence & sign-off": "Partially in place",
+            "8. Resilience": "In place and evidenced" if euc.get("spof_indicator") == "No" else "Partially in place",
+        }
+        for control in BASELINE_CONTROL_AREAS:
+            c_status, c_rationale = st.columns([1, 2])
+            status = c_status.selectbox(control, CONTROL_STATUSES, index=option_index(CONTROL_STATUSES, default_by_control.get(control, "In place and evidenced")), key=f"risk_{euc['euc_id']}_{control}")
+            rationale = c_rationale.text_input(f"Rationale / evidence notes — {control}", key=f"risk_note_{euc['euc_id']}_{control}")
+            controls[control] = {"status": status, "rationale": rationale}
+
+        rationale = st.text_area("Overall assessment rationale / notes")
+        if st.form_submit_button("Submit policy risk assessment"):
+            assessment_id = svc.create_risk_assessment(
+                {
+                    "euc_id": euc["euc_id"],
+                    "assessment_date": assessment_date.isoformat(),
+                    "assessed_by": assessed_by,
+                    "assessment_type": assessment_type,
+                    "trigger_type": assessment_type,
+                    "materiality_q1": q1,
+                    "materiality_q2": q2,
+                    "materiality_q3": q3,
+                    "owner_integrity_level": owner_integrity,
+                    "owner_timeliness_level": owner_timeliness,
+                    "integrity_rationale": integrity_rationale,
+                    "timeliness_rationale": timeliness_rationale,
+                    "controls": controls,
+                    "rationale": rationale,
+                },
+                username,
+            )
+            st.success(f"Assessment {assessment_id} submitted. Effective inherent risk, residual risk, and required artifact completeness were recalculated.")
+            rerun()
 
 def page_documents() -> None:
     st.title("Documents & Evidence Pack")

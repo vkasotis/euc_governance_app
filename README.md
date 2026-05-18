@@ -28,6 +28,22 @@ This MVP is intentionally self-contained:
 └── uploads/                # Local evidence/document storage
 ```
 
+
+## Uploaded workbook alignment
+
+The current version was adjusted after reviewing the two uploaded workbooks:
+
+- `1. EUC Inventory.xlsm`
+  - `EUC Inventory` sheet: master EUC register fields.
+  - `EUC Asset Inventory` sheet: one-to-many asset/component rows belonging to a parent EUC.
+  - `LOV` sheet: reference values for legal entities, business units, technology types, storage types, input sources, SPOF, frequency, and automation level.
+- `2. EUC Risk_Assessement.xlsx`
+  - `Assessment` sheet: risk assessment form and formulas.
+  - `Lookups` sheet: risk levels, control statuses, assessment types, residual matrix, and EUC lookup data.
+  - `Dimensions & Risk Levels` sheet: definitions and guidance.
+
+The app does not require these Excel files at runtime; their rules and fields are represented in the SQLite schema, Streamlit forms, and `services.py` governance logic.
+
 ## Features
 
 ### Governance modules
@@ -70,13 +86,14 @@ The login is a demo scaffold only. It is isolated in the Streamlit session-state
 
 ### Governance logic implemented
 
-- Unique EUC reference generation such as `EUC-000001`
+- Unique EUC reference generation using the workbook-style `EUC.001` convention
 - Duplicate hints using name, owner, business unit, and storage location
 - BCBS 239 output mapping requirement
 - `Not Applicable` mapping justification check
-- Multiple components/assets for one logical EUC
-- Risk assessment scoring and full history
-- Automatic risk and residual risk update on assessment submission
+- Multiple EUC Asset Inventory rows for one logical EUC, linked through `euc_id`
+- Registration fields aligned to the uploaded EUC Inventory workbook, including Legal Entity, Reviewer, material report/KRI/model flags, active users, BU/COTS/SLA indicators, Library of Controls, and industrialization/decommissioning status
+- Risk assessment methodology aligned to the uploaded workbook: BCBS 239 materiality questions, Integrity / Accuracy and Timeliness / Availability dimensions, baseline control assessment, derived control effectiveness, residual-risk matrix, required action guidance, and full assessment history
+- Automatic inherent/residual risk update on assessment submission
 - Evidence upload to local `/uploads` storage
 - Evidence metadata: document type, requirement, control area, CACRT dimension, lifecycle stage, risk applicability, version, and status
 - GCC/Data Validation evidence review with accept/reject/comment/deficiency tagging
@@ -92,16 +109,31 @@ The login is a demo scaffold only. It is isolated in the Streamlit session-state
 - Immutable audit trail viewer from the UI
 - Admin reference data and required artifact rule management, including maker-checker comment fields
 
-## Risk scoring rule
+## Risk assessment methodology
 
-The MVP applies the configurable scoring convention implemented in `services.py`:
+The Risk Assessment page implements the logic from the uploaded `EUC Risk_Assessement.xlsx` workbook rather than the original five-slider MVP rule.
 
-- Average score 1.0-1.9 = Low
-- Average score 2.0-2.9 = Medium
-- Average score 3.0-3.9 = High
-- Average score 4.0-5.0 = Very High
+The assessment flow is:
 
-Inherent risk is calculated from integrity/accuracy, timeliness/availability, complexity, and business criticality. Residual risk includes the control effectiveness score as the fifth score.
+1. Capture assessment metadata and assessment type: Periodic, Material Change, Incident-triggered, or Manual trigger.
+2. Capture three BCBS 239 materiality questions. If any answer is `Yes`, the EUC is treated as materially supporting a BCBS 239 in-scope output.
+3. Capture owner inherent levels for the two policy dimensions:
+   - Integrity / Accuracy
+   - Timeliness / Availability
+4. If the EUC materially supports BCBS 239, the effective inherent risk for both dimensions is forced to `Very High`.
+5. Capture the eight baseline control areas:
+   - Registration & risk assessment
+   - Privileged Access
+   - Versioning & change log
+   - Checks & reconciliations
+   - EUC Library of Controls (CACRT)
+   - Operating Procedure
+   - Evidence & sign-off
+   - Resilience
+6. Derive control effectiveness as `Strong`, `Adequate`, `Weak`, or `Not in place` using the workbook rule.
+7. Apply the residual-risk matrix from the workbook to determine residual risk by dimension and overall residual risk. Material BCBS-supporting EUCs cannot fall below Medium residual risk.
+
+The older average-score helper remains only as a backwards-compatible fallback for legacy seed or migration payloads.
 
 ## Required artifact logic
 
