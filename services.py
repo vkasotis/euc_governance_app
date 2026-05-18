@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from difflib import SequenceMatcher
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -449,23 +450,68 @@ def get_euc_by_reference(reference_id: str) -> dict[str, Any] | None:
     return fetch_one("SELECT * FROM eucs WHERE reference_id = ?", (reference_id,))
 
 
+def _normalize_match_text(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
 def detect_duplicates(name: str, owner: str, business_unit: str, storage_location: str, exclude_euc_id: int | None = None) -> pd.DataFrame:
-    """Simple duplicate heuristic using name tokens, owner, business unit, and storage path."""
-    name_token = f"%{(name or '').strip()[:8]}%" if name else "%"
-    params: list[Any] = [name_token, owner, business_unit, storage_location]
+    """High-confidence duplicate detection for EUC registration.
+
+    The previous heuristic flagged any EUC in the same business unit or with the
+    same owner, which generated false positives for normal portfolio activity.
+    The revised logic only reports records with a strong name match, matching
+    storage path, or similar name combined with the same owner/business unit.
+    """
+    params: list[Any] = []
     sql = """
         SELECT euc_id, reference_id, name, owner, business_unit, storage_location, lifecycle_status, residual_risk
         FROM eucs
-        WHERE lower(name) LIKE lower(?)
-           OR owner = ?
-           OR business_unit = ?
-           OR storage_location = ?
     """
     if exclude_euc_id:
-        sql += " AND euc_id <> ?"
+        sql += " WHERE euc_id <> ?"
         params.append(exclude_euc_id)
     sql += " ORDER BY updated_at DESC"
-    return dataframe(sql, tuple(params))
+    df = dataframe(sql, tuple(params))
+    if df.empty:
+        return df
+
+    target_name = _normalize_match_text(name)
+    target_owner = _normalize_match_text(owner)
+    target_unit = _normalize_match_text(business_unit)
+    target_storage = _normalize_match_text(storage_location)
+
+    matches: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        row_name = _normalize_match_text(row.get("name"))
+        row_owner = _normalize_match_text(row.get("owner"))
+        row_unit = _normalize_match_text(row.get("business_unit"))
+        row_storage = _normalize_match_text(row.get("storage_location"))
+        reasons: list[str] = []
+        confidence = ""
+
+        if target_name and row_name == target_name:
+            reasons.append("same EUC name")
+            confidence = "High"
+
+        similarity = SequenceMatcher(None, target_name, row_name).ratio() if target_name and row_name else 0.0
+        if similarity >= 0.88:
+            reasons.append(f"very similar EUC name ({similarity:.0%})")
+            confidence = "High"
+        elif similarity >= 0.72 and ((target_owner and target_owner == row_owner) or (target_unit and target_unit == row_unit)):
+            reasons.append(f"similar EUC name ({similarity:.0%}) with same owner/business unit")
+            confidence = confidence or "Medium"
+
+        if target_storage and row_storage and target_storage == row_storage:
+            reasons.append("same controlled storage location")
+            confidence = "High"
+
+        if reasons:
+            item = row.to_dict()
+            item["duplicate_confidence"] = confidence or "Medium"
+            item["match_reason"] = "; ".join(dict.fromkeys(reasons))
+            matches.append(item)
+
+    return pd.DataFrame(matches)
 
 
 def validate_mapping_fields(payload: dict[str, Any]) -> list[str]:

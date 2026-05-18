@@ -205,3 +205,7 @@ The Group IT Governance Administrator can manage users from `Admin Configuration
 6. Click `Save selected user`.
 
 User profile changes are written to the audit trail. Active users also feed the MVP login username suggestions for each role.
+
+## Patch note: regression cleanup
+
+This version removes raw JSON-style review panels from the business UI. Completed risk assessments, EUC summary fields, and mapping fields are now rendered as normal field/value tables and workbook-style review sections. Duplicate detection during registration has also been tightened to avoid flagging unrelated EUCs only because they share the same business unit or owner.

@@ -133,6 +133,106 @@ def option_index(options: list[str], value: str | None, default: int = 0) -> int
         return options.index(value)
     return default
 
+def display_value(value: Any) -> str:
+    """Return a business-friendly display value for table/card views."""
+    if value is None:
+        return "—"
+    if isinstance(value, float) and pd.isna(value):
+        return "—"
+    text = str(value)
+    if text.strip() == "" or text.lower() in {"nan", "none", "null"}:
+        return "—"
+    return text
+
+
+def labelize(field_name: str) -> str:
+    return field_name.replace("_", " ").strip().title()
+
+
+def record_table(record: dict[str, Any], fields: list[str | tuple[str, str]], *, title: str | None = None) -> None:
+    """Render a record as a normal field/value table instead of raw JSON."""
+    rows: list[dict[str, str]] = []
+    for item in fields:
+        if isinstance(item, tuple):
+            label, key = item
+        else:
+            label, key = labelize(item), item
+        rows.append({"Field": label, "Value": display_value(record.get(key))})
+    if title:
+        st.markdown(f"#### {title}")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def assessment_review_card(assessment: dict[str, Any]) -> None:
+    """Render a completed risk assessment in workbook-style business sections."""
+    st.markdown(
+        f"#### Assessment {display_value(assessment.get('assessment_id'))} "
+        f"— Version {display_value(assessment.get('version'))}"
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Assessment date", display_value(assessment.get("assessment_date")))
+    c2.metric("Assessed by", display_value(assessment.get("assessed_by")))
+    c3.metric("Overall inherent risk", display_value(assessment.get("overall_inherent_risk") or assessment.get("inherent_risk")))
+    c4.metric("Overall residual risk", display_value(assessment.get("overall_residual_risk") or assessment.get("residual_risk")))
+
+    st.markdown("##### BCBS 239 materiality")
+    record_table(
+        assessment,
+        [
+            ("Could materially affect BCBS 239 output", "materiality_q1"),
+            ("Key control point", "materiality_q2"),
+            ("Single point of failure", "materiality_q3"),
+            ("Materially supports BCBS 239", "materially_supports_bcbs239"),
+            ("Assessment type", "trigger_type"),
+        ],
+    )
+
+    st.markdown("##### Risk dimensions")
+    dimensions = pd.DataFrame(
+        [
+            {
+                "Dimension": "Integrity / Accuracy",
+                "Owner inherent": display_value(assessment.get("owner_integrity_inherent")),
+                "Effective inherent": display_value(assessment.get("effective_integrity_inherent") or assessment.get("inherent_risk")),
+                "Control effectiveness": display_value(assessment.get("integrity_control_effectiveness")),
+                "Residual risk": display_value(assessment.get("integrity_residual_risk") or assessment.get("residual_risk")),
+            },
+            {
+                "Dimension": "Timeliness / Availability",
+                "Owner inherent": display_value(assessment.get("owner_timeliness_inherent")),
+                "Effective inherent": display_value(assessment.get("effective_timeliness_inherent") or assessment.get("inherent_risk")),
+                "Control effectiveness": display_value(assessment.get("timeliness_control_effectiveness")),
+                "Residual risk": display_value(assessment.get("timeliness_residual_risk") or assessment.get("residual_risk")),
+            },
+        ]
+    )
+    st.dataframe(dimensions, use_container_width=True, hide_index=True)
+
+    st.markdown("##### Baseline controls")
+    controls = pd.DataFrame(
+        [
+            {"Control": "Registration & risk assessment", "Status": display_value(assessment.get("control_registration_risk_assessment"))},
+            {"Control": "Privileged Access", "Status": display_value(assessment.get("control_privileged_access"))},
+            {"Control": "Versioning & change log", "Status": display_value(assessment.get("control_versioning_change_log"))},
+            {"Control": "Checks & reconciliations", "Status": display_value(assessment.get("control_checks_reconciliations"))},
+            {"Control": "EUC Library of Controls / CACRT", "Status": display_value(assessment.get("control_library_controls_cacrt"))},
+            {"Control": "Operating Procedure", "Status": display_value(assessment.get("control_operating_procedure"))},
+            {"Control": "Evidence & sign-off", "Status": display_value(assessment.get("control_evidence_signoff"))},
+            {"Control": "Resilience", "Status": display_value(assessment.get("control_resilience"))},
+        ]
+    )
+    st.dataframe(controls, use_container_width=True, hide_index=True)
+
+    st.markdown("##### Required action and rationale")
+    record_table(
+        assessment,
+        [
+            ("Required action", "required_action"),
+            ("Rationale / comments", "rationale"),
+            ("Created at", "created_at"),
+        ],
+    )
+
 
 def selected_euc_id() -> int | None:
     value = st.session_state.get("selected_euc_id")
@@ -351,7 +451,21 @@ def page_detail() -> None:
     tabs = st.tabs(["Overview", "Mapping", "Components", "Risk History", "Evidence", "Tasks", "Reviews", "Audit"])
     with tabs[0]:
         st.write(euc.get("description") or "No description recorded.")
-        st.json({k: euc.get(k) for k in ["purpose", "business_unit", "technology_type", "storage_location", "frequency", "schedule", "cut_off", "spof_indicator", "next_review_date"]})
+        record_table(
+            euc,
+            [
+                "purpose",
+                "business_unit",
+                "technology_type",
+                "storage_location",
+                "frequency",
+                "schedule",
+                "cut_off",
+                ("SPOF indicator", "spof_indicator"),
+                "next_review_date",
+            ],
+            title="EUC summary",
+        )
         if svc.can_edit_euc(role, username, euc):
             with st.expander("Edit EUC summary and lifecycle"):
                 with st.form("edit_euc"):
@@ -376,7 +490,20 @@ def page_detail() -> None:
                         except ValueError as exc:
                             st.error(str(exc))
     with tabs[1]:
-        st.json({k: euc.get(k) for k in ["business_context", "bcbs239_output_mapping", "cde_linkage", "inputs", "outputs", "recipients", "dependencies", "mapping_na_justification"]})
+        record_table(
+            euc,
+            [
+                "business_context",
+                ("BCBS 239 output mapping", "bcbs239_output_mapping"),
+                ("CDE linkage", "cde_linkage"),
+                "inputs",
+                "outputs",
+                "recipients",
+                "dependencies",
+                ("Not Applicable justification", "mapping_na_justification"),
+            ],
+            title="Mapping information",
+        )
         if svc.can_edit_euc(role, username, euc):
             with st.expander("Edit mapping fields"):
                 with st.form("edit_mapping"):
@@ -515,7 +642,7 @@ def page_risk_assessment() -> None:
             }
             chosen = st.selectbox("Completed assessment", list(assessment_map.keys()), key="risk_review_select")
             selected = assessments[assessments["assessment_id"] == assessment_map[chosen]].iloc[0].to_dict()
-            st.json(selected)
+            assessment_review_card(selected)
             st.info("Completed assessments are retained as history. To amend a completed assessment, submit a new version below.")
 
     if not svc.can_edit_euc(role, username, euc) and role not in {svc.ADMIN_ROLE, svc.GCC_ROLE}:
@@ -621,7 +748,7 @@ def page_documents() -> None:
             selected = assessments[assessments["assessment_id"] == int(open_id)]
             if not selected.empty:
                 with st.expander(f"Assessment {open_id} review", expanded=True):
-                    st.json(selected.iloc[0].to_dict())
+                    assessment_review_card(selected.iloc[0].to_dict())
 
     st.subheader("Uploaded evidence")
     docs = svc.get_documents(euc["euc_id"])
@@ -991,7 +1118,8 @@ def page_admin() -> None:
     with tabs[0]:
         category = st.selectbox("Category", ["document_type", "lifecycle_status", "risk_level", "control_area", "cacrt_dimension"])
         st.write("Current values")
-        st.write(refs.get(category, []))
+        values_df = pd.DataFrame({"Value": refs.get(category, [])})
+        safe_df(values_df)
         with st.form("add_ref"):
             value = st.text_input("New reference value")
             comments = st.text_area("Maker-checker comments")
