@@ -240,3 +240,15 @@ This version implements the risk-assessment workbook logic more closely:
 - Residual risk is calculated through the workbook residual-risk matrix.
 - Material BCBS 239 EUCs cannot have overall residual risk below Medium.
 - Documents & Evidence Pack no longer expects risk assessment uploads. Completed risk assessments appear as evidence links and can be opened for review from the evidence pack.
+
+## Patch notes - task, inventory, asset, and evidence-pack usability
+
+This version also includes the following workflow refinements:
+
+- EUC Inventory is row-filtered for EUC Owners and Contributors. GCC, Data Validation, Group IT Governance Administrator, and Internal Audit can view the full portfolio.
+- Tasks & Remediation now requires EUC selection first, then displays the task queue for that EUC.
+- Task tables include assignee full name and email, resolved from the local User Directory.
+- Admin Configuration includes a User Directory tab for maintaining usernames, full names, emails, roles, and active status.
+- Components / EUC Asset Inventory allows a user to select an asset row and edit the linked component record.
+- Documents & Evidence Pack uses a simplified evidence-upload form: document type, file, comments, and automatic initial status of Submitted.
+- The Required Artifact Checklist is embedded directly in the Documents & Evidence Pack page so users can see pending and completed artifacts before uploading evidence.

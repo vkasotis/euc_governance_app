@@ -676,6 +676,96 @@ def page_detail() -> None:
     with tabs[8]:
         safe_df(svc.audit_trail({"entity_type": "EUC", "entity_id": euc["euc_id"]}), height=350)
 
+def _asset_payload_from_form(euc: dict[str, Any], username: str, prefix: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Render asset fields and return payload for create/update."""
+    existing = existing or {}
+    c1, c2, c3 = st.columns(3)
+    component_name = c1.text_input("Files / Asset name *", value=existing.get("component_name") or "", key=f"{prefix}_component_name")
+    component_type = c2.selectbox(
+        "Component / technology type *",
+        TECHNOLOGY_TYPES,
+        index=option_index(TECHNOLOGY_TYPES, existing.get("component_type") or euc.get("technology_type")),
+        key=f"{prefix}_component_type",
+    )
+    technology = c3.text_input("Technology", value=existing.get("technology") or euc.get("technology_type") or "", key=f"{prefix}_technology")
+    material_mapping = st.text_area(
+        "RRF Material Report, Material Report/KRI/Model Mapping",
+        value=existing.get("material_report_mapping") or euc.get("bcbs239_output_mapping") or "",
+        key=f"{prefix}_material_mapping",
+    )
+    operationalization_link = st.text_input(
+        "Operationalization Document Link",
+        value=existing.get("operationalization_document_link") or "",
+        key=f"{prefix}_operationalization_link",
+    )
+    description = st.text_area("File description", value=existing.get("description") or "", key=f"{prefix}_description")
+    c4, c5, c6 = st.columns(3)
+    controlled_storage_type = c4.selectbox(
+        "Controlled Storage Type",
+        CONTROL_STORAGE_TYPES,
+        index=option_index(CONTROL_STORAGE_TYPES, existing.get("controlled_storage_type")),
+        key=f"{prefix}_controlled_storage_type",
+    )
+    storage_location = c5.text_input(
+        "Controlled Storage Location",
+        value=existing.get("storage_location") or euc.get("storage_location") or "",
+        key=f"{prefix}_storage_location",
+    )
+    level_of_automation = c6.selectbox(
+        "Level of Automation",
+        AUTOMATION_LEVELS,
+        index=option_index(AUTOMATION_LEVELS, existing.get("level_of_automation")),
+        key=f"{prefix}_level_of_automation",
+    )
+    input_sources = st.text_area("Input sources (systems/files/APIs)", value=existing.get("input_sources") or euc.get("inputs") or "", key=f"{prefix}_input_sources")
+    c7, c8, c9 = st.columns(3)
+    cut_off_times = c7.text_input("Cut-off times", value=existing.get("cut_off_times") or euc.get("cut_off") or "", key=f"{prefix}_cut_off_times")
+    processing_schedule = c8.text_input("Processing Schedule / Execution Window", value=existing.get("processing_schedule") or euc.get("schedule") or "", key=f"{prefix}_processing_schedule")
+    execution_frequency = c9.selectbox(
+        "Execution Frequency",
+        FREQUENCIES,
+        index=option_index(FREQUENCIES, existing.get("execution_frequency") or euc.get("frequency")),
+        key=f"{prefix}_execution_frequency",
+    )
+    cde_mappings = st.text_area("CDE Mappings", value=existing.get("cde_mappings") or euc.get("cde_linkage") or "", key=f"{prefix}_cde_mappings")
+    data_outputs = st.text_area("Data Outputs / Produced Files / Reports", value=existing.get("data_outputs") or euc.get("outputs") or "", key=f"{prefix}_data_outputs")
+    backup = st.text_area("Backup / Recovery Arrangements", value=existing.get("backup_recovery_arrangements") or "", key=f"{prefix}_backup")
+    c10, c11, c12, c13 = st.columns(4)
+    spof_risk = c10.selectbox("Single Point of Failure (SPOF) risk", ["No", "Yes"], index=option_index(["No", "Yes"], existing.get("spof_risk") or euc.get("spof_indicator")), key=f"{prefix}_spof_risk")
+    criticality = c11.selectbox("Criticality", ["Low", "Medium", "High", "Critical"], index=option_index(["Low", "Medium", "High", "Critical"], existing.get("criticality") or ("High" if euc.get("residual_risk") in {"High", "Very High"} else "Medium")), key=f"{prefix}_criticality")
+    asset_owner = c12.text_input("Asset Owner", value=existing.get("owner") or euc.get("owner") or username, key=f"{prefix}_asset_owner")
+    default_review = pd.to_datetime(existing.get("review_date") or euc.get("next_review_date") or date.today()).date()
+    review_date = c13.date_input("Review Date", value=default_review, key=f"{prefix}_review_date")
+    default_mod = pd.to_datetime(existing.get("modification_date") or date.today()).date()
+    modification_date = st.date_input("Modification Date", value=default_mod, key=f"{prefix}_modification_date")
+    return {
+        "euc_id": euc["euc_id"],
+        "component_name": component_name,
+        "component_type": component_type,
+        "technology": technology,
+        "business_unit": euc.get("business_unit"),
+        "euc_application": euc.get("name"),
+        "material_report_mapping": material_mapping,
+        "operationalization_document_link": operationalization_link,
+        "storage_location": storage_location,
+        "controlled_storage_type": controlled_storage_type,
+        "input_sources": input_sources,
+        "cut_off_times": cut_off_times,
+        "processing_schedule": processing_schedule,
+        "execution_frequency": execution_frequency,
+        "cde_mappings": cde_mappings,
+        "data_outputs": data_outputs,
+        "level_of_automation": level_of_automation,
+        "backup_recovery_arrangements": backup,
+        "spof_risk": spof_risk,
+        "modification_date": modification_date.isoformat(),
+        "review_date": review_date.isoformat(),
+        "criticality": criticality,
+        "owner": asset_owner,
+        "description": description,
+    }
+
+
 def page_components() -> None:
     st.title("Components / EUC Asset Inventory")
     username, role = current_user()
@@ -693,71 +783,44 @@ def page_components() -> None:
     visible_assets = assets[[c for c in preferred_cols if c in assets.columns]] if not assets.empty else assets
     safe_df(visible_assets, height=350)
     delete_record_panel("EUC Asset", assets, "component_id", ["component_name", "technology", "owner"], key="components_asset")
+
+    if not assets.empty:
+        st.subheader("Select and edit EUC Asset Inventory row")
+        options = {
+            f"{int(row['component_id'])} — {row['component_name']} — {row.get('technology') or 'n/a'}": int(row["component_id"])
+            for _, row in assets.iterrows()
+        }
+        selected_label = st.selectbox("Asset row from table", list(options.keys()))
+        selected_asset = svc.get_component(options[selected_label])
+        if selected_asset:
+            with st.expander("Edit selected asset", expanded=True):
+                if svc.can_edit_euc(role, username, euc):
+                    with st.form("edit_component"):
+                        payload = _asset_payload_from_form(euc, username, "edit_asset", selected_asset)
+                        if st.form_submit_button("Save selected asset changes"):
+                            try:
+                                svc.update_component(int(selected_asset["component_id"]), payload, username)
+                                st.success("Selected EUC asset row updated.")
+                                rerun()
+                            except ValueError as exc:
+                                st.error(str(exc))
+                else:
+                    st.json({k: selected_asset.get(k) for k in preferred_cols if k in selected_asset})
+
     if not svc.can_edit_euc(role, username, euc):
-        st.info("You can view assets but cannot add assets for this EUC in the current role.")
+        st.info("You can view assets but cannot add or edit assets for this EUC in the current role.")
         return
-    with st.form("add_component"):
-        st.subheader("Add EUC Asset Inventory row")
-        c1, c2, c3 = st.columns(3)
-        component_name = c1.text_input("Files / Asset name *")
-        component_type = c2.selectbox("Component / technology type *", TECHNOLOGY_TYPES, index=option_index(TECHNOLOGY_TYPES, euc.get("technology_type")))
-        technology = c3.text_input("Technology", value=euc.get("technology_type") or "")
-        material_mapping = st.text_area("RRF Material Report, Material Report/KRI/Model Mapping", value=euc.get("bcbs239_output_mapping") or "")
-        operationalization_link = st.text_input("Operationalization Document Link")
-        description = st.text_area("File description")
-        c4, c5, c6 = st.columns(3)
-        controlled_storage_type = c4.selectbox("Controlled Storage Type", CONTROL_STORAGE_TYPES)
-        storage_location = c5.text_input("Controlled Storage Location", value=euc.get("storage_location") or "")
-        level_of_automation = c6.selectbox("Level of Automation", AUTOMATION_LEVELS)
-        input_sources = st.text_area("Input sources (systems/files/APIs)", value=euc.get("inputs") or "")
-        c7, c8, c9 = st.columns(3)
-        cut_off_times = c7.text_input("Cut-off times", value=euc.get("cut_off") or "")
-        processing_schedule = c8.text_input("Processing Schedule / Execution Window", value=euc.get("schedule") or "")
-        execution_frequency = c9.selectbox("Execution Frequency", FREQUENCIES, index=option_index(FREQUENCIES, euc.get("frequency")))
-        cde_mappings = st.text_area("CDE Mappings", value=euc.get("cde_linkage") or "")
-        data_outputs = st.text_area("Data Outputs / Produced Files / Reports", value=euc.get("outputs") or "")
-        backup = st.text_area("Backup / Recovery Arrangements")
-        c10, c11, c12, c13 = st.columns(4)
-        spof_risk = c10.selectbox("Single Point of Failure (SPOF) risk", ["No", "Yes"], index=option_index(["No", "Yes"], euc.get("spof_indicator")))
-        criticality = c11.selectbox("Criticality", ["Low", "Medium", "High", "Critical"], index=2 if euc.get("residual_risk") in {"High", "Very High"} else 1)
-        owner = c12.text_input("Asset Owner", value=euc.get("owner") or username)
-        review_date = c13.date_input("Review Date", value=pd.to_datetime(euc.get("next_review_date") or date.today()).date())
-        modification_date = st.date_input("Modification Date", value=date.today())
-        if st.form_submit_button("Add asset"):
-            if not component_name:
-                st.error("Files / Asset name is required.")
-            else:
-                svc.create_component(
-                    {
-                        "euc_id": euc["euc_id"],
-                        "component_name": component_name,
-                        "component_type": component_type,
-                        "technology": technology,
-                        "business_unit": euc.get("business_unit"),
-                        "euc_application": euc.get("name"),
-                        "material_report_mapping": material_mapping,
-                        "operationalization_document_link": operationalization_link,
-                        "storage_location": storage_location,
-                        "controlled_storage_type": controlled_storage_type,
-                        "input_sources": input_sources,
-                        "cut_off_times": cut_off_times,
-                        "processing_schedule": processing_schedule,
-                        "execution_frequency": execution_frequency,
-                        "cde_mappings": cde_mappings,
-                        "data_outputs": data_outputs,
-                        "level_of_automation": level_of_automation,
-                        "backup_recovery_arrangements": backup,
-                        "spof_risk": spof_risk,
-                        "modification_date": modification_date.isoformat(),
-                        "review_date": review_date.isoformat(),
-                        "criticality": criticality,
-                        "owner": owner,
-                        "description": description,
-                    },
-                    username,
-                )
-                st.success("EUC asset row added and linked to the selected EUC.")
-                rerun()
+    with st.expander("Add new EUC Asset Inventory row", expanded=assets.empty):
+        with st.form("add_component"):
+            payload = _asset_payload_from_form(euc, username, "add_asset")
+            if st.form_submit_button("Add asset"):
+                if not payload["component_name"]:
+                    st.error("Files / Asset name is required.")
+                else:
+                    svc.create_component(payload, username)
+                    st.success("EUC asset row added and linked to the selected EUC.")
+                    rerun()
+
 
 def page_risk_assessment() -> None:
     st.title("Risk Assessment")
@@ -887,6 +950,22 @@ def page_documents() -> None:
     if not euc:
         return
 
+    st.subheader("Required Artifact Checklist")
+    st.markdown(f"Residual risk: **{badge(euc['residual_risk'])}** · Completeness: **{badge(euc['documentation_completeness_status'])}**")
+    checklist = svc.artifact_checklist(euc["euc_id"])
+    checklist_cols = ["document_type", "mandatory", "status", "document_id", "reviewed_by", "comments"]
+    safe_df(checklist[[c for c in checklist_cols if c in checklist.columns]] if not checklist.empty else checklist, height=260)
+    c_check1, c_check2 = st.columns(2)
+    if c_check1.button("Recalculate evidence completeness"):
+        status = svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
+        st.success(f"Completeness status: {status}")
+        rerun()
+    if c_check2.button("Create tasks for missing/rejected mandatory artifacts", disabled=svc.is_read_only(role)):
+        status = svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=True)
+        st.success(f"Follow-up tasks checked/created. Completeness status: {status}")
+        rerun()
+
+    st.divider()
     st.subheader("Risk assessment evidence")
     assessments = svc.get_risk_assessments(euc["euc_id"])
     if assessments.empty:
@@ -896,10 +975,6 @@ def page_documents() -> None:
         link_rows = []
         for _, row in assessments.iterrows():
             review_url = assessment_review_url(int(euc["euc_id"]), int(row["assessment_id"]))
-            st.markdown(
-                f"- [Review Risk Assessment #{int(row['assessment_id'])} v{int(row['version'])}]({review_url}) "
-                f"— {row['assessment_date']} · inherent **{row['inherent_risk']}** · residual **{row['residual_risk']}**"
-            )
             link_rows.append(
                 {
                     "assessment_id": int(row["assessment_id"]),
@@ -933,9 +1008,10 @@ def page_documents() -> None:
     st.divider()
     st.subheader("Uploaded document evidence")
     docs = svc.get_documents(euc["euc_id"])
-    safe_df(docs, height=320)
+    doc_cols = ["document_id", "document_type", "file_name", "status", "uploaded_by", "uploaded_at", "reviewed_by", "reviewed_at", "comments", "deficiency_tag"]
+    safe_df(docs[[c for c in doc_cols if c in docs.columns]] if not docs.empty else docs, height=320)
     delete_record_panel("Document", docs, "document_id", ["document_type", "file_name", "status"], key="documents_document")
-    st.caption("Risk Assessment is not uploaded here. The Required Artifact Checklist uses the completed Risk Assessment record for this EUC.")
+    st.caption("Upload only the evidence type and file. Status is assigned automatically as Submitted, then updated by GCC/Data Validation review. Risk Assessment comes from the Risk Assessment module.")
 
     col_upload, col_review = st.columns(2)
     with col_upload:
@@ -945,21 +1021,25 @@ def page_documents() -> None:
             with st.form("doc_metadata"):
                 uploadable_document_types = [doc_type for doc_type in DOCUMENT_TYPES if doc_type != "Risk Assessment"]
                 document_type = st.selectbox("Document type", uploadable_document_types)
-                requirement = st.text_input("Requirement", value=f"Mandatory {document_type}")
-                control_area = st.selectbox("Control area", CONTROL_AREAS)
-                cacrt = st.selectbox("CACRT dimension", CACRT_DIMENSIONS)
-                risk_app = st.selectbox("Risk applicability", ["All", "Low", "Medium", "High", "Very High"])
-                lifecycle_stage = st.selectbox("Lifecycle stage", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, euc.get("lifecycle_status")))
-                version = st.text_input("Version", value="1.0")
-                status = st.selectbox("Initial status", ["Submitted", "Pending"])
                 comments = st.text_area("Comments")
+                st.info("Initial status will be set automatically to Submitted.")
                 if st.form_submit_button("Save uploaded evidence"):
                     if uploaded is None:
                         st.error("Select a file before saving metadata.")
                     else:
                         file_name, file_path = svc.save_document_file(euc["euc_id"], uploaded.name, uploaded.getvalue())
-                        doc_id = svc.create_document_record({"euc_id": euc["euc_id"], "file_name": file_name, "file_path": file_path, "document_type": document_type, "requirement": requirement, "control_area": control_area, "cacrt_dimension": cacrt, "risk_applicability": risk_app, "lifecycle_stage": lifecycle_stage, "version": version, "status": status, "comments": comments}, username)
-                        st.success(f"Evidence uploaded as document {doc_id}.")
+                        doc_id = svc.create_document_record(
+                            {
+                                "euc_id": euc["euc_id"],
+                                "file_name": file_name,
+                                "file_path": file_path,
+                                "document_type": document_type,
+                                "status": "Submitted",
+                                "comments": comments,
+                            },
+                            username,
+                        )
+                        st.success(f"Evidence uploaded as document {doc_id}. Status: Submitted.")
                         rerun()
         else:
             st.info("Upload is disabled for the current role/EUC relationship.")
@@ -1005,14 +1085,25 @@ def page_checklist() -> None:
 def page_tasks() -> None:
     st.title("Tasks & Remediation")
     username, role = current_user()
+    st.caption("Select an EUC first. The task table is then filtered to the selected EUC and the current role/user visibility.")
+    euc = euc_selector("Select EUC for task review")
+    if not euc:
+        return
     open_only = st.toggle("Open tasks only", value=True)
-    tasks = svc.get_tasks(role, username, open_only=open_only)
-    safe_df(tasks, height=420)
+    tasks = svc.get_tasks(role, username, open_only=open_only, euc_id=euc["euc_id"])
+    preferred_cols = [
+        "task_id", "reference_id", "euc_name", "task_type", "title", "description",
+        "assigned_to", "assigned_full_name", "assigned_email", "assigned_role",
+        "due_date", "overdue", "priority", "status", "closure_reason",
+        "closure_evidence_document_id", "created_at", "closed_at",
+    ]
+    visible_tasks = tasks[[c for c in preferred_cols if c in tasks.columns]] if not tasks.empty else tasks
+    safe_df(visible_tasks, height=420)
     delete_record_panel("Task", tasks, "task_id", ["task_type", "title", "status"], key="tasks_task")
     if tasks.empty or svc.is_read_only(role):
         return
-    st.subheader("Update task")
-    task_map = {f"{row['task_id']} — {row['title']}": int(row["task_id"]) for _, row in tasks.iterrows()}
+    st.subheader("Update selected EUC task")
+    task_map = {f"{int(row['task_id'])} — {row['title']}": int(row["task_id"]) for _, row in tasks.iterrows()}
     chosen = st.selectbox("Task", list(task_map.keys()))
     with st.form("update_task"):
         status = st.selectbox("Status", TASK_STATUSES)
@@ -1294,7 +1385,7 @@ def page_admin() -> None:
         st.warning("Admin Configuration is restricted to Group IT Governance Administrator.")
         return
     refs = svc.load_reference_data()
-    tabs = st.tabs(["Reference data", "Required artifact rules", "Due-date rules", "Seed/reset demo"])
+    tabs = st.tabs(["Reference data", "Required artifact rules", "User directory", "Due-date rules", "Seed/reset demo"])
     with tabs[0]:
         category = st.selectbox("Category", ["document_type", "lifecycle_status", "risk_level", "control_area", "cacrt_dimension"])
         st.write("Current values")
@@ -1329,11 +1420,30 @@ def page_admin() -> None:
                 st.success("Rule created.")
                 rerun()
     with tabs[2]:
+        users = svc.user_directory(active_only=False)
+        st.caption("This local directory maps task assignees to names and emails. It is intentionally separate from SSO for the MVP.")
+        safe_df(users, height=320)
+        delete_record_panel("User Profile", users, "user_id", ["username", "email", "role"], key="admin_user_profile")
+        with st.form("upsert_user_profile"):
+            c1, c2 = st.columns(2)
+            new_username = c1.text_input("Username *", placeholder="Firstname.Lastname")
+            full_name = c2.text_input("Full name *")
+            email = c1.text_input("Email *", placeholder="name@eurobank.gr")
+            user_role = c2.selectbox("Role *", ROLES)
+            active_flag = st.checkbox("Active", value=True)
+            if st.form_submit_button("Create / update user profile"):
+                try:
+                    svc.upsert_user_profile({"username": new_username.strip(), "full_name": full_name.strip(), "email": email.strip(), "role": user_role, "active_flag": active_flag}, username)
+                    st.success("User profile saved.")
+                    rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+    with tabs[3]:
         due_rules_df = svc.due_date_rules_table()
         safe_df(due_rules_df, height=360)
         delete_record_panel("Due-date Rule", due_rules_df, "rule_id", ["task_type", "due_days"], key="admin_due_rule")
         st.caption("Due-date rule editing is represented in the data model. The MVP uses default seeded rules for generated tasks.")
-    with tabs[3]:
+    with tabs[4]:
         st.warning("The app auto-seeds an empty local database for demo readiness. Use the command-line seed script for controlled resets.")
         if st.button("Run seed data loader", type="secondary"):
             seed_database(force=False)

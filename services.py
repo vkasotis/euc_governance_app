@@ -39,15 +39,28 @@ APPROVER_ROLE = "Approver / Head of Unit"
 OWNER_ROLE = "EUC Owner"
 CONTRIBUTOR_ROLE = "EUC Owner Delegate / Contributor"
 
-ROLE_USERNAMES = {
-    OWNER_ROLE: ["Maria.Papadopoulou", "Nikos.Georgiou", "Elena.Dimitriou", "Kostas.Ioannou"],
-    CONTRIBUTOR_ROLE: ["EUC.Contributor", "Christina.Markou"],
-    GCC_ROLE: ["GCC.User", "GCC.Monitor"],
-    DVU_ROLE: ["DVU.Reviewer", "Data.Validation"],
-    ADMIN_ROLE: ["Admin.User", "IT.Governance.Admin"],
-    APPROVER_ROLE: ["Head.Of.Unit", "Approver.User"],
-    READ_ONLY_ROLE: ["Internal.Audit", "Read.Only"],
-}
+DEFAULT_USER_PROFILES = [
+    {"username": "Maria.Papadopoulou", "full_name": "Maria Papadopoulou", "email": "maria.papadopoulou@eurobank.gr", "role": OWNER_ROLE},
+    {"username": "Nikos.Georgiou", "full_name": "Nikos Georgiou", "email": "nikos.georgiou@eurobank.gr", "role": OWNER_ROLE},
+    {"username": "Elena.Dimitriou", "full_name": "Elena Dimitriou", "email": "elena.dimitriou@eurobank.gr", "role": OWNER_ROLE},
+    {"username": "Kostas.Ioannou", "full_name": "Kostas Ioannou", "email": "kostas.ioannou@eurobank.gr", "role": OWNER_ROLE},
+    {"username": "EUC.Contributor", "full_name": "EUC Contributor", "email": "euc.contributor@eurobank.gr", "role": CONTRIBUTOR_ROLE},
+    {"username": "Christina.Markou", "full_name": "Christina Markou", "email": "christina.markou@eurobank.gr", "role": CONTRIBUTOR_ROLE},
+    {"username": "GCC.User", "full_name": "GCC User", "email": "gcc.user@eurobank.gr", "role": GCC_ROLE},
+    {"username": "GCC.Monitor", "full_name": "GCC Monitor", "email": "gcc.monitor@eurobank.gr", "role": GCC_ROLE},
+    {"username": "DVU.Reviewer", "full_name": "Data Validation Reviewer", "email": "dvu.reviewer@eurobank.gr", "role": DVU_ROLE},
+    {"username": "Data.Validation", "full_name": "Data Validation Unit", "email": "data.validation@eurobank.gr", "role": DVU_ROLE},
+    {"username": "Admin.User", "full_name": "Admin User", "email": "admin.user@eurobank.gr", "role": ADMIN_ROLE},
+    {"username": "IT.Governance.Admin", "full_name": "IT Governance Admin", "email": "it.governance.admin@eurobank.gr", "role": ADMIN_ROLE},
+    {"username": "Head.Of.Unit", "full_name": "Head of Unit", "email": "head.of.unit@eurobank.gr", "role": APPROVER_ROLE},
+    {"username": "Approver.User", "full_name": "Approver User", "email": "approver.user@eurobank.gr", "role": APPROVER_ROLE},
+    {"username": "Internal.Audit", "full_name": "Internal Audit", "email": "internal.audit@eurobank.gr", "role": READ_ONLY_ROLE},
+    {"username": "Read.Only", "full_name": "Read Only User", "email": "read.only@eurobank.gr", "role": READ_ONLY_ROLE},
+]
+
+ROLE_USERNAMES = {}
+for _profile in DEFAULT_USER_PROFILES:
+    ROLE_USERNAMES.setdefault(_profile["role"], []).append(_profile["username"])
 
 DEFAULT_DUE_DAYS = {
     "Registration completion": 7,
@@ -113,7 +126,93 @@ OWNER_INHERENT_LEVELS = ["Low", "Medium", "High"]
 
 
 def username_options_for_role(role: str) -> list[str]:
+    db_users = dataframe(
+        "SELECT username FROM user_profiles WHERE role = ? AND active_flag = 1 ORDER BY username",
+        (role,),
+    )
+    if not db_users.empty:
+        return db_users["username"].tolist()
     return ROLE_USERNAMES.get(role, ["Demo.User"])
+
+
+def seed_user_profiles(username: str = "system") -> None:
+    """Seed and maintain the local user/email directory used for task routing."""
+    now = utc_now()
+    for profile in DEFAULT_USER_PROFILES:
+        execute(
+            """
+            INSERT OR IGNORE INTO user_profiles(username, full_name, email, role, active_flag, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
+            """,
+            (profile["username"], profile["full_name"], profile["email"], profile["role"], now, now),
+        )
+
+
+def user_directory(role: str | None = None, active_only: bool = True) -> pd.DataFrame:
+    where = []
+    params: list[Any] = []
+    if role:
+        where.append("role = ?")
+        params.append(role)
+    if active_only:
+        where.append("active_flag = 1")
+    sql = "SELECT user_id, username, full_name, email, role, active_flag, created_at, updated_at FROM user_profiles"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY role, full_name, username"
+    return dataframe(sql, tuple(params))
+
+
+def get_user_profile(username: str | None) -> dict[str, Any] | None:
+    if not username:
+        return None
+    return fetch_one("SELECT * FROM user_profiles WHERE username = ?", (username,))
+
+
+def upsert_user_profile(payload: dict[str, Any], performed_by: str) -> int:
+    required = ["username", "full_name", "email", "role"]
+    missing = [field for field in required if not str(payload.get(field, "")).strip()]
+    if missing:
+        raise ValueError("Missing mandatory user fields: " + ", ".join(missing))
+    if "@" not in payload["email"]:
+        raise ValueError("A valid email address is required.")
+    old = get_user_profile(payload["username"])
+    now = utc_now()
+    if old:
+        execute(
+            """
+            UPDATE user_profiles
+            SET full_name = ?, email = ?, role = ?, active_flag = ?, updated_at = ?
+            WHERE username = ?
+            """,
+            (
+                payload["full_name"],
+                payload["email"],
+                payload["role"],
+                int(bool(payload.get("active_flag", True))),
+                now,
+                payload["username"],
+            ),
+        )
+        insert_audit("User Profile", payload["username"], "UPDATE", performed_by, old, payload)
+        return int(old.get("user_id") or 0)
+    user_id = execute(
+        """
+        INSERT INTO user_profiles(username, full_name, email, role, active_flag, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["username"],
+            payload["full_name"],
+            payload["email"],
+            payload["role"],
+            int(bool(payload.get("active_flag", True))),
+            now,
+            now,
+        ),
+    )
+    insert_audit("User Profile", user_id, "CREATE", performed_by, None, payload)
+    return user_id
 
 
 def is_read_only(role: str) -> bool:
@@ -122,6 +221,17 @@ def is_read_only(role: str) -> bool:
 
 def can_view_all(role: str) -> bool:
     return role in {ADMIN_ROLE, GCC_ROLE, DVU_ROLE, APPROVER_ROLE, READ_ONLY_ROLE}
+
+
+def can_view_all_eucs(role: str) -> bool:
+    """Portfolio-wide EUC visibility.
+
+    EUC Owners and Contributors see only EUCs where they are owner, delegate,
+    or creator. GCC, Data Validation, IT Governance Admin, and Internal Audit
+    can view the full EUC portfolio. Approvers retain approval workflows but
+    do not receive blanket inventory visibility in the MVP.
+    """
+    return role in {ADMIN_ROLE, GCC_ROLE, DVU_ROLE, READ_ONLY_ROLE}
 
 
 def can_configure(role: str) -> bool:
@@ -313,7 +423,7 @@ def generate_reference_id() -> str:
 
 
 def all_eucs(role: str | None = None, username: str | None = None) -> pd.DataFrame:
-    if role and username and not can_view_all(role):
+    if role and username and not can_view_all_eucs(role):
         return dataframe(
             """
             SELECT * FROM eucs
@@ -552,6 +662,34 @@ def get_components(euc_id: int) -> pd.DataFrame:
     )
 
 
+COMPONENT_FIELDS = [
+    "euc_id",
+    "component_name",
+    "component_type",
+    "technology",
+    "business_unit",
+    "euc_application",
+    "material_report_mapping",
+    "operationalization_document_link",
+    "storage_location",
+    "controlled_storage_type",
+    "input_sources",
+    "cut_off_times",
+    "processing_schedule",
+    "execution_frequency",
+    "cde_mappings",
+    "data_outputs",
+    "level_of_automation",
+    "backup_recovery_arrangements",
+    "spof_risk",
+    "modification_date",
+    "review_date",
+    "description",
+    "criticality",
+    "owner",
+]
+
+
 def create_component(payload: dict[str, Any], username: str) -> int:
     now = utc_now()
     component_id = execute(
@@ -594,6 +732,33 @@ def create_component(payload: dict[str, Any], username: str) -> int:
     )
     insert_audit("EUC Asset", component_id, "CREATE", username, None, payload)
     return component_id
+
+
+def get_component(component_id: int) -> dict[str, Any] | None:
+    return fetch_one(
+        """
+        SELECT c.*, e.reference_id, e.name AS euc_name
+        FROM components c
+        JOIN eucs e ON e.euc_id = c.euc_id
+        WHERE c.component_id = ?
+        """,
+        (component_id,),
+    )
+
+
+def update_component(component_id: int, payload: dict[str, Any], username: str) -> None:
+    old = get_component(component_id)
+    if not old:
+        raise ValueError("EUC asset was not found.")
+    if not str(payload.get("component_name", "")).strip():
+        raise ValueError("Files / Asset name is required.")
+    allowed = [field for field in COMPONENT_FIELDS if field != "euc_id"]
+    assignments = ", ".join([f"{field} = ?" for field in allowed])
+    values = [payload.get(field, old.get(field)) for field in allowed]
+    values.append(component_id)
+    execute(f"UPDATE components SET {assignments} WHERE component_id = ?", tuple(values))
+    insert_audit("EUC Asset", component_id, "UPDATE", username, old, payload)
+
 
 def get_risk_assessments(euc_id: int) -> pd.DataFrame:
     return dataframe("SELECT * FROM risk_assessments WHERE euc_id = ? ORDER BY version DESC, assessment_id DESC", (euc_id,))
@@ -727,6 +892,7 @@ DELETE_ENTITY_CONFIG = {
     "Required Artifact Rule": {"table": "required_artifact_rules", "pk": "rule_id", "euc_fk": None},
     "Reference Data": {"table": "reference_data", "pk": "ref_id", "euc_fk": None},
     "Due-date Rule": {"table": "due_date_rules", "pk": "rule_id", "euc_fk": None},
+    "User Profile": {"table": "user_profiles", "pk": "user_id", "euc_fk": None},
 }
 
 
@@ -1116,11 +1282,19 @@ def create_task(
     return task_id
 
 
-def get_tasks(role: str | None = None, username: str | None = None, open_only: bool = False) -> pd.DataFrame:
+def get_tasks(
+    role: str | None = None,
+    username: str | None = None,
+    open_only: bool = False,
+    euc_id: int | None = None,
+) -> pd.DataFrame:
     where = []
     params: list[Any] = []
     if open_only:
         where.append("t.status IN ('Open','In Progress','Blocked','Closure Requested')")
+    if euc_id:
+        where.append("t.euc_id = ?")
+        params.append(int(euc_id))
     if role and username and not can_view_all(role):
         where.append("(t.assigned_to = ? OR t.assigned_role = ?)")
         params.extend([username, role])
@@ -1129,9 +1303,11 @@ def get_tasks(role: str | None = None, username: str | None = None, open_only: b
         params.extend([role, username])
     sql = """
         SELECT t.*, e.reference_id, e.name AS euc_name, e.owner, e.residual_risk,
+               up.full_name AS assigned_full_name, up.email AS assigned_email,
                CASE WHEN t.due_date IS NOT NULL AND date(t.due_date) < date('now') AND t.status NOT IN ('Closed','Cancelled') THEN 1 ELSE 0 END AS overdue
         FROM tasks t
         LEFT JOIN eucs e ON e.euc_id = t.euc_id
+        LEFT JOIN user_profiles up ON up.username = t.assigned_to
     """
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -1631,6 +1807,7 @@ def due_date_rules_table() -> pd.DataFrame:
 
 
 def initialize_reference_data(username: str = "system") -> None:
+    seed_user_profiles(username)
     seed_required_rules(username)
     constants = {
         "document_type": DOCUMENT_TYPES,

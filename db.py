@@ -58,6 +58,14 @@ def init_db() -> None:
 def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
     """Add MVP columns when a previous local DB already exists."""
     expected_columns = {
+        "user_profiles": {
+            "full_name": "TEXT DEFAULT ''",
+            "email": "TEXT DEFAULT ''",
+            "role": "TEXT DEFAULT 'EUC Owner'",
+            "active_flag": "INTEGER NOT NULL DEFAULT 1",
+            "created_at": "TEXT",
+            "updated_at": "TEXT",
+        },
         "eucs": {
             "industrialization_rationale": "TEXT",
             "decommissioning_rationale": "TEXT",

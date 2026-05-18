@@ -226,6 +226,18 @@ DEFAULT_REQUIRED_ARTIFACTS = {
 
 CREATE_TABLES_SQL = [
     """
+    CREATE TABLE IF NOT EXISTS user_profiles (
+        user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        full_name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        role TEXT NOT NULL,
+        active_flag INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS eucs (
         euc_id INTEGER PRIMARY KEY AUTOINCREMENT,
         reference_id TEXT UNIQUE NOT NULL,
@@ -531,6 +543,7 @@ CREATE_TABLES_SQL = [
 ]
 
 INDEX_SQL = [
+    "CREATE INDEX IF NOT EXISTS idx_users_username ON user_profiles(username);",
     "CREATE INDEX IF NOT EXISTS idx_eucs_owner ON eucs(owner);",
     "CREATE INDEX IF NOT EXISTS idx_eucs_status ON eucs(lifecycle_status);",
     "CREATE INDEX IF NOT EXISTS idx_docs_euc_type ON documents(euc_id, document_type);",
