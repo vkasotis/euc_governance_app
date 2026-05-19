@@ -209,3 +209,53 @@ User profile changes are written to the audit trail. Active users also feed the 
 ## Patch note: regression cleanup
 
 This version removes raw JSON-style review panels from the business UI. Completed risk assessments, EUC summary fields, and mapping fields are now rendered as normal field/value tables and workbook-style review sections. Duplicate detection during registration has also been tightened to avoid flagging unrelated EUCs only because they share the same business unit or owner.
+
+### Patch note - task visibility
+
+The **Tasks & Remediation** page is user-scoped. When a role and username are selected at login, the page shows only tasks directly assigned to that username, tasks assigned to that role queue, and, for EUC Owner / Contributor users, tasks linked to EUCs they own, are delegated to, or created. Portfolio-wide task reporting remains available in GCC Monitoring and Reports.
+
+### Patch note - reports and audit navigation
+
+The sidebar now hides restricted pages based on the selected role:
+
+- `Reports & KPIs` is available only to `GCC`, `Data Validation Unit`, and `Group IT Governance Administrator`.
+- `Audit Trail` is available only to `GCC`.
+
+The page functions also enforce the same restrictions if a restricted route is reached directly.
+
+### Patch note - RACI-based email actions
+
+The app now includes a local notification outbox driven by the Appendix 6 RACI matrix.
+
+New capabilities:
+
+- `Email Notifications` page for `GCC`, `Data Validation Unit`, and `Group IT Governance Administrator`.
+- `notification_outbox` table for queued email actions.
+- `raci_rules` table for event-to-RACI routing.
+- User Directory support for notification-only groups: `IOF`, `Data Governance`, and `GRM Strategy & Oversight / Projects (Group Finance)`.
+- Automatic notification queuing for key governance actions:
+  - EUC registration and EUC updates
+  - EUC component updates
+  - risk assessment completion
+  - evidence submission and review
+  - independent review completion
+  - findings raised
+  - exceptions raised and exception decisions
+  - incidents logged
+  - material changes logged
+  - industrialization requests
+  - task assignment and task updates
+  - reference data / required artifact rule / user directory changes
+
+The MVP queues notifications even when no mail server is configured. To enable actual SMTP sending, set these environment variables before running Streamlit:
+
+```bash
+SMTP_HOST=smtp.example.internal
+SMTP_PORT=587
+SMTP_FROM=euc-governance@eurobank.gr
+SMTP_USER=<optional>
+SMTP_PASSWORD=<optional>
+SMTP_USE_TLS=true
+```
+
+When SMTP is not configured, notifications remain in `Pending` status and can be exported or manually statused from the `Email Notifications` page.

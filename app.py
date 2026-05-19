@@ -19,6 +19,7 @@ from schema import (
     CACRT_DIMENSIONS,
     CHANGE_TYPES,
     CONTROL_AREAS,
+    DIRECTORY_ROLES,
     DOCUMENT_STATUSES,
     DOCUMENT_TYPES,
     FINDING_SEVERITIES,
@@ -58,8 +59,29 @@ NAVIGATION = [
     "Industrialization & Decommissioning",
     "Reports & KPIs",
     "Admin Configuration",
+    "Email Notifications",
     "Audit Trail",
 ]
+
+REPORTS_ACCESS_ROLES = {svc.GCC_ROLE, svc.ADMIN_ROLE, svc.DVU_ROLE}
+NOTIFICATION_ACCESS_ROLES = {svc.GCC_ROLE, svc.ADMIN_ROLE, svc.DVU_ROLE}
+AUDIT_ACCESS_ROLES = {svc.GCC_ROLE}
+
+
+def can_access_page(page: str, role: str) -> bool:
+    """Central page-access guard for role-sensitive navigation items."""
+    if page == "Reports & KPIs":
+        return role in REPORTS_ACCESS_ROLES
+    if page == "Email Notifications":
+        return role in NOTIFICATION_ACCESS_ROLES
+    if page == "Audit Trail":
+        return role in AUDIT_ACCESS_ROLES
+    return True
+
+
+def navigation_for_role(role: str) -> list[str]:
+    """Return only the pages the current role is allowed to open."""
+    return [page for page in NAVIGATION if can_access_page(page, role)]
 
 
 def bootstrap() -> None:
@@ -286,7 +308,12 @@ def show_sidebar() -> str:
     st.sidebar.divider()
     st.sidebar.write(f"**Logged in as:** {username}")
     st.sidebar.write(f"**Role:** {role}")
-    page = st.sidebar.radio("Navigation", NAVIGATION, index=0)
+
+    allowed_pages = navigation_for_role(role)
+    if not allowed_pages:
+        allowed_pages = ["Home / Dashboard"]
+    page = st.sidebar.radio("Navigation", allowed_pages, index=0)
+
     st.sidebar.divider()
     st.sidebar.caption(f"SQLite: `{DATABASE_FILE.name}` · Uploads: `/uploads`")
     return page
@@ -832,20 +859,63 @@ def page_checklist() -> None:
 def page_tasks() -> None:
     st.title("Tasks & Remediation")
     username, role = current_user()
+    st.caption(
+        "This page is scoped to the logged-in user. It shows tasks assigned to you, "
+        "tasks assigned to your role queue, and, for EUC owners/contributors, tasks linked to your own or delegated EUCs."
+    )
     open_only = st.toggle("Open tasks only", value=True)
-    tasks = svc.get_tasks(role, username, open_only=open_only)
-    safe_df(tasks, height=420)
+    scoped_tasks = svc.get_tasks(role, username, open_only=open_only)
+
+    if scoped_tasks.empty:
+        st.info("No tasks are assigned to your user, role queue, or accessible EUCs for the current filter.")
+        return
+
+    euc_options = ["All my accessible tasks"]
+    euc_lookup: dict[str, int] = {}
+    euc_cols = [c for c in ["euc_id", "reference_id", "euc_name"] if c in scoped_tasks.columns]
+    if set(["euc_id", "reference_id", "euc_name"]).issubset(euc_cols):
+        euc_rows = scoped_tasks[["euc_id", "reference_id", "euc_name"]].drop_duplicates().sort_values(["reference_id", "euc_name"])
+        for _, row in euc_rows.iterrows():
+            label = f"{row['reference_id']} — {row['euc_name']}"
+            euc_options.append(label)
+            euc_lookup[label] = int(row["euc_id"])
+
+    chosen_euc = st.selectbox("Filter by EUC", euc_options)
+    tasks = scoped_tasks.copy()
+    if chosen_euc != "All my accessible tasks":
+        tasks = tasks[tasks["euc_id"] == euc_lookup[chosen_euc]]
+
+    display_cols = [
+        "task_id", "reference_id", "euc_name", "task_type", "title", "assigned_to",
+        "assigned_full_name", "assigned_email", "assigned_role", "due_date", "priority", "status", "overdue"
+    ]
+    safe_df(tasks[[c for c in display_cols if c in tasks.columns]], height=420)
+
     if tasks.empty or svc.is_read_only(role):
         return
-    st.subheader("Update task")
+
+    st.subheader("Update selected task")
     task_map = {f"{row['task_id']} — {row['title']}": int(row["task_id"]) for _, row in tasks.iterrows()}
     chosen = st.selectbox("Task", list(task_map.keys()))
+    selected_task = tasks[tasks["task_id"] == task_map[chosen]].iloc[0].to_dict()
     with st.form("update_task"):
-        status = st.selectbox("Status", TASK_STATUSES)
-        evidence_id = st.number_input("Closure evidence document ID", min_value=0, value=0, step=1)
-        reason = st.text_area("Closure reason / response")
+        c1, c2, c3 = st.columns(3)
+        status = c1.selectbox("Status", TASK_STATUSES, index=option_index(TASK_STATUSES, selected_task.get("status")))
+        priority = c2.selectbox("Priority", PRIORITIES, index=option_index(PRIORITIES, selected_task.get("priority")))
+        due_default = pd.to_datetime(selected_task.get("due_date"), errors="coerce")
+        due_date = c3.date_input("Due date", value=(due_default.date() if pd.notna(due_default) else date.today()))
+        evidence_id = st.number_input(
+            "Closure evidence document ID",
+            min_value=0,
+            value=int(selected_task.get("closure_evidence_document_id") or 0),
+            step=1,
+        )
+        reason = st.text_area("Closure reason / response", value=selected_task.get("closure_reason") or "")
         if st.form_submit_button("Update task"):
+            # The table is already scoped to the current user/role. Only selected
+            # task IDs from that scoped table can be submitted through this form.
             svc.update_task(task_map[chosen], status, reason, int(evidence_id) or None, username)
+            svc.update_task_admin_fields(task_map[chosen], due_date.isoformat(), priority, username)
             st.success("Task updated.")
             rerun()
 
@@ -1091,6 +1161,10 @@ def page_lifecycle() -> None:
 
 def page_reports() -> None:
     st.title("Reports & KPIs")
+    username, role = current_user()
+    if role not in REPORTS_ACCESS_ROLES:
+        st.warning("Reports & KPIs are restricted to GCC, Data Validation Unit, and Group IT Governance Administrator users.")
+        return
     df = svc.all_eucs()
     c1, c2, c3, c4 = st.columns(4)
     owner = c1.selectbox("Owner", ["All"] + sorted(df["owner"].dropna().unique().tolist()) if not df.empty else ["All"])
@@ -1165,7 +1239,7 @@ def page_admin() -> None:
                 edit_username = c1.text_input("Username *", value=selected_user.get("username") or "")
                 full_name = c2.text_input("Full name", value=selected_user.get("full_name") or "")
                 email = c1.text_input("Email", value=selected_user.get("email") or "")
-                edit_role = c2.selectbox("Role *", ROLES, index=option_index(ROLES, selected_user.get("role")))
+                edit_role = c2.selectbox("Role *", DIRECTORY_ROLES, index=option_index(DIRECTORY_ROLES, selected_user.get("role")))
                 active = c1.checkbox("Active", value=bool(selected_user.get("active_flag")))
                 comments = st.text_area("Maker-checker / admin comments", value=selected_user.get("maker_checker_comments") or "")
                 save_user = st.form_submit_button("Save selected user", type="primary")
@@ -1194,7 +1268,7 @@ def page_admin() -> None:
                 new_username = c1.text_input("New username *")
                 new_full_name = c2.text_input("New full name")
                 new_email = c1.text_input("New email")
-                new_role = c2.selectbox("New role *", ROLES, key="new_user_role")
+                new_role = c2.selectbox("New role *", DIRECTORY_ROLES, key="new_user_role")
                 new_active = c1.checkbox("New user active", value=True)
                 new_comments = st.text_area("New user comments")
                 if st.form_submit_button("Create user"):
@@ -1239,9 +1313,121 @@ def page_admin() -> None:
             st.success("Seed loader executed. Existing records were not overwritten.")
 
 
+
+def page_notifications() -> None:
+    st.title("Email Notifications")
+    username, role = current_user()
+    if role not in NOTIFICATION_ACCESS_ROLES:
+        st.warning("Email Notifications are restricted to GCC, Data Validation Unit, and Group IT Governance Administrator users.")
+        return
+    st.caption("Email actions are queued from the RACI matrix. SMTP sending is optional and controlled by environment variables.")
+
+    tabs = st.tabs(["Notification outbox", "RACI email rules", "SMTP configuration"])
+    with tabs[0]:
+        c1, c2, c3 = st.columns(3)
+        statuses = ["All"] + svc.notification_statuses()
+        events = ["All"] + svc.notification_event_types()
+        status_filter = c1.selectbox("Status", statuses)
+        event_filter = c2.selectbox("Event type", events)
+        recipient_filter = c3.text_input("Recipient contains")
+        outbox = svc.notification_outbox_table({"status": status_filter, "event_type": event_filter, "recipient": recipient_filter})
+        display_cols = [
+            "notification_id", "status", "event_type", "activity_decision", "reference_id", "recipient_username",
+            "recipient_email", "recipient_role", "raci_party", "raci_responsibility", "created_at", "sent_at", "error_message",
+        ]
+        safe_df(outbox[[c for c in display_cols if c in outbox.columns]] if not outbox.empty else outbox, height=460)
+        csv_download(outbox, "notification_outbox.csv")
+
+        st.markdown("#### Send / manage selected notifications")
+        c4, c5 = st.columns(2)
+        limit = c4.number_input("Maximum pending emails to send", min_value=1, max_value=500, value=25, step=5)
+        if c5.button("Send pending via SMTP", type="primary"):
+            try:
+                result = svc.send_pending_notifications(int(limit), username)
+                st.success(f"Attempted {result['attempted']} notification(s). Sent: {result['sent']}; failed: {result['failed']}.")
+                rerun()
+            except Exception as exc:
+                st.error(str(exc))
+
+        if not outbox.empty:
+            labels = {
+                f"{row['notification_id']} — {row['event_type']} — {row.get('recipient_email') or row.get('recipient_username') or 'no recipient'}": int(row["notification_id"])
+                for _, row in outbox.iterrows()
+            }
+            chosen = st.selectbox("Select notification to update manually", list(labels.keys()))
+            c6, c7 = st.columns(2)
+            manual_status = c6.selectbox("Manual status", ["Pending", "Sent", "Failed", "Cancelled", "No Email"])
+            manual_error = c7.text_input("Status note / error message")
+            if st.button("Update notification status"):
+                svc.update_notification_status(labels[chosen], manual_status, username, manual_error or None)
+                st.success("Notification status updated.")
+                rerun()
+
+    with tabs[1]:
+        st.markdown("#### RACI-driven email rules")
+        rules = svc.raci_rules_table(active_only=False)
+        safe_df(rules, height=420)
+        csv_download(rules, "raci_email_rules.csv")
+        if role == svc.ADMIN_ROLE and not rules.empty:
+            st.markdown("#### Edit selected RACI rule")
+            labels = {f"{row['event_type']} — {row['activity_decision']}": int(row["rule_id"]) for _, row in rules.iterrows()}
+            chosen_rule = st.selectbox("Rule", list(labels.keys()))
+            rule = rules[rules["rule_id"] == labels[chosen_rule]].iloc[0].to_dict()
+            with st.form("edit_raci_rule"):
+                activity = st.text_input("Activity / decision", value=rule.get("activity_decision") or "")
+                c1, c2, c3, c4 = st.columns(4)
+                raci_options = ["-", "A", "R", "A/R", "C", "I", "A/R (checks)", "R (submit)", "C (provide info)", "R (findings)", "A (raise)"]
+                euc_owner = c1.selectbox("EUC Owner", raci_options, index=option_index(raci_options, rule.get("euc_owner_raci")))
+                dvu = c2.selectbox("Data Validation Unit", raci_options, index=option_index(raci_options, rule.get("data_validation_unit_raci")))
+                gcc = c3.selectbox("GCC", raci_options, index=option_index(raci_options, rule.get("gcc_raci")))
+                group_it = c4.selectbox("Group IT Governance", raci_options, index=option_index(raci_options, rule.get("group_it_governance_raci")))
+                c5, c6, c7, c8 = st.columns(4)
+                iof = c5.selectbox("IOF", raci_options, index=option_index(raci_options, rule.get("iof_raci")))
+                data_gov = c6.selectbox("Data Governance", raci_options, index=option_index(raci_options, rule.get("data_governance_raci")))
+                audit = c7.selectbox("Internal Audit", raci_options, index=option_index(raci_options, rule.get("internal_audit_raci")))
+                grm = c8.selectbox("GRM Strategy / Projects", raci_options, index=option_index(raci_options, rule.get("grm_strategy_raci")))
+                active = st.checkbox("Active", value=bool(rule.get("active_flag")))
+                comments = st.text_area("Maker-checker comments", value=rule.get("maker_checker_comments") or "")
+                if st.form_submit_button("Save RACI rule"):
+                    svc.update_raci_rule(
+                        int(rule["rule_id"]),
+                        {
+                            "activity_decision": activity,
+                            "euc_owner_raci": euc_owner,
+                            "data_validation_unit_raci": dvu,
+                            "gcc_raci": gcc,
+                            "group_it_governance_raci": group_it,
+                            "iof_raci": iof,
+                            "data_governance_raci": data_gov,
+                            "internal_audit_raci": audit,
+                            "grm_strategy_raci": grm,
+                            "active_flag": active,
+                            "maker_checker_comments": comments,
+                        },
+                        username,
+                    )
+                    st.success("RACI email rule updated.")
+                    rerun()
+        elif role != svc.ADMIN_ROLE:
+            st.info("Only Group IT Governance Administrator can edit RACI rules. GCC and Data Validation can view and export them.")
+
+    with tabs[2]:
+        st.markdown("#### Optional SMTP environment variables")
+        st.write("The MVP queues email actions even when no SMTP server is configured. To send emails, configure these environment variables in Streamlit Cloud or the local shell:")
+        st.code("""SMTP_HOST=smtp.example.internal
+SMTP_PORT=587
+SMTP_FROM=euc-governance@eurobank.gr
+SMTP_USER=<optional>
+SMTP_PASSWORD=<optional>
+SMTP_USE_TLS=true""", language="bash")
+        st.info("If SMTP_HOST or SMTP_FROM is missing, the Send button leaves notifications in Pending status and shows a configuration warning.")
+
 def page_audit() -> None:
     st.title("Audit Trail")
     username, role = current_user()
+    if role not in AUDIT_ACCESS_ROLES:
+        st.warning("Audit Trail is restricted to GCC users.")
+        return
     st.caption("Audit records are immutable from the UI.")
     c1, c2, c3, c4, c5 = st.columns(5)
     entity_type = c1.text_input("Entity type")
@@ -1258,6 +1444,10 @@ def page_audit() -> None:
 
 
 def route(page: str) -> None:
+    _, role = current_user()
+    if not can_access_page(page, role):
+        st.warning("You do not have access to this page with the current role.")
+        return
     routes = {
         "Home / Dashboard": page_dashboard,
         "EUC Inventory": page_inventory,
@@ -1277,6 +1467,7 @@ def route(page: str) -> None:
         "Industrialization & Decommissioning": page_lifecycle,
         "Reports & KPIs": page_reports,
         "Admin Configuration": page_admin,
+        "Email Notifications": page_notifications,
         "Audit Trail": page_audit,
     }
     routes[page]()

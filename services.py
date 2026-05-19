@@ -6,7 +6,10 @@ import os
 import re
 from difflib import SequenceMatcher
 from datetime import date, datetime, timedelta
+from email.message import EmailMessage
 from pathlib import Path
+import smtplib
+import ssl
 from typing import Any
 
 import pandas as pd
@@ -18,6 +21,8 @@ from schema import (
     DEFAULT_REQUIRED_ARTIFACTS,
     DOCUMENT_TYPES,
     LIFECYCLE_STATUSES,
+    RACI_PARTIES,
+    RACI_RULE_DEFINITIONS,
     RISK_LEVELS,
     ROLES,
     TASK_TYPES,
@@ -31,6 +36,20 @@ DVU_ROLE = "Data Validation Unit"
 APPROVER_ROLE = "Approver / Head of Unit"
 OWNER_ROLE = "EUC Owner"
 CONTRIBUTOR_ROLE = "EUC Owner Delegate / Contributor"
+IOF_ROLE = "IOF"
+DATA_GOVERNANCE_ROLE = "Data Governance"
+GRM_STRATEGY_ROLE = "GRM Strategy & Oversight / Projects (Group Finance)"
+
+RACI_PARTY_TO_PROFILE_ROLE = {
+    "EUC Owner": OWNER_ROLE,
+    "Data Validation Unit": DVU_ROLE,
+    "GCC": GCC_ROLE,
+    "Group IT Governance": ADMIN_ROLE,
+    "IOF": IOF_ROLE,
+    "Data Governance": DATA_GOVERNANCE_ROLE,
+    "Internal Audit": READ_ONLY_ROLE,
+    "GRM Strategy & Oversight / Projects (Group Finance)": GRM_STRATEGY_ROLE,
+}
 
 ROLE_USERNAMES = {
     OWNER_ROLE: ["Maria.Papadopoulou", "Nikos.Georgiou", "Elena.Dimitriou", "Kostas.Ioannou"],
@@ -40,6 +59,12 @@ ROLE_USERNAMES = {
     ADMIN_ROLE: ["Admin.User", "IT.Governance.Admin"],
     APPROVER_ROLE: ["Head.Of.Unit", "Approver.User"],
     READ_ONLY_ROLE: ["Internal.Audit", "Read.Only"],
+}
+
+RACI_ONLY_ROLE_USERNAMES = {
+    IOF_ROLE: ["IOF.User"],
+    DATA_GOVERNANCE_ROLE: ["Data.Governance"],
+    GRM_STRATEGY_ROLE: ["GRM.Projects"],
 }
 
 DEFAULT_DUE_DAYS = {
@@ -80,7 +105,8 @@ def username_options_for_role(role: str) -> list[str]:
 
 
 def seed_user_profiles(username: str = "system") -> None:
-    for role, users in ROLE_USERNAMES.items():
+    directory_seed_users = {**ROLE_USERNAMES, **RACI_ONLY_ROLE_USERNAMES}
+    for role, users in directory_seed_users.items():
         for login in users:
             execute(
                 """
@@ -145,6 +171,14 @@ def upsert_user_profile(payload: dict[str, Any], performed_by: str) -> int:
         ),
     )
     insert_audit("User Profile", user_id, "CREATE", performed_by, None, payload)
+    queue_raci_notifications(
+        "USER_PROFILE_UPDATED",
+        "User Profile",
+        user_id,
+        None,
+        performed_by,
+        context={"Username": payload.get("username"), "Role": payload.get("role"), "Action": "Created"},
+    )
     return user_id
 
 
@@ -172,6 +206,14 @@ def update_user_profile(user_id: int, payload: dict[str, Any], performed_by: str
         ),
     )
     insert_audit("User Profile", user_id, "UPDATE", performed_by, old, payload)
+    queue_raci_notifications(
+        "USER_PROFILE_UPDATED",
+        "User Profile",
+        user_id,
+        None,
+        performed_by,
+        context={"Username": payload.get("username"), "Role": payload.get("role"), "Action": "Updated"},
+    )
 
 
 def deactivate_user_profile(user_id: int, performed_by: str) -> None:
@@ -183,7 +225,449 @@ def deactivate_user_profile(user_id: int, performed_by: str) -> None:
         (performed_by, utc_now(), user_id),
     )
     insert_audit("User Profile", user_id, "DEACTIVATE", performed_by, old, {"active_flag": 0})
+    queue_raci_notifications(
+        "USER_PROFILE_UPDATED",
+        "User Profile",
+        user_id,
+        None,
+        performed_by,
+        context={"Username": old.get("username"), "Role": old.get("role"), "Action": "Deactivated"},
+    )
 
+
+def seed_raci_rules(username: str = "system") -> None:
+    """Seed the RACI matrix from Appendix 6 as event-driven notification rules."""
+    now = utc_now()
+    for definition in RACI_RULE_DEFINITIONS:
+        activity = definition["activity_decision"]
+        raci = definition["raci"]
+        for event_type in definition["event_types"]:
+            execute(
+                """
+                INSERT OR IGNORE INTO raci_rules(
+                    activity_decision, event_type, euc_owner_raci, data_validation_unit_raci,
+                    gcc_raci, group_it_governance_raci, iof_raci, data_governance_raci,
+                    internal_audit_raci, grm_strategy_raci, active_flag, maker_checker_comments,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                """,
+                (
+                    activity,
+                    event_type,
+                    raci.get("EUC Owner", "-"),
+                    raci.get("Data Validation Unit", "-"),
+                    raci.get("GCC", "-"),
+                    raci.get("Group IT Governance", "-"),
+                    raci.get("IOF", "-"),
+                    raci.get("Data Governance", "-"),
+                    raci.get("Internal Audit", "-"),
+                    raci.get("GRM Strategy & Oversight / Projects (Group Finance)", "-"),
+                    "Seeded from Appendix 6 RACI matrix.",
+                    now,
+                    now,
+                ),
+            )
+
+
+def raci_rules_table(active_only: bool = False) -> pd.DataFrame:
+    sql = "SELECT * FROM raci_rules"
+    if active_only:
+        sql += " WHERE active_flag = 1"
+    sql += " ORDER BY activity_decision, event_type"
+    return dataframe(sql)
+
+
+def get_raci_rule(event_type: str) -> dict[str, Any] | None:
+    return fetch_one("SELECT * FROM raci_rules WHERE event_type = ? AND active_flag = 1", (event_type,))
+
+
+def update_raci_rule(rule_id: int, payload: dict[str, Any], username: str) -> None:
+    old = fetch_one("SELECT * FROM raci_rules WHERE rule_id = ?", (rule_id,))
+    if not old:
+        raise ValueError("RACI rule not found")
+    execute(
+        """
+        UPDATE raci_rules
+        SET activity_decision = ?, euc_owner_raci = ?, data_validation_unit_raci = ?, gcc_raci = ?,
+            group_it_governance_raci = ?, iof_raci = ?, data_governance_raci = ?, internal_audit_raci = ?,
+            grm_strategy_raci = ?, active_flag = ?, maker_checker_comments = ?, updated_at = ?
+        WHERE rule_id = ?
+        """,
+        (
+            payload.get("activity_decision", old.get("activity_decision")),
+            payload.get("euc_owner_raci", old.get("euc_owner_raci")),
+            payload.get("data_validation_unit_raci", old.get("data_validation_unit_raci")),
+            payload.get("gcc_raci", old.get("gcc_raci")),
+            payload.get("group_it_governance_raci", old.get("group_it_governance_raci")),
+            payload.get("iof_raci", old.get("iof_raci")),
+            payload.get("data_governance_raci", old.get("data_governance_raci")),
+            payload.get("internal_audit_raci", old.get("internal_audit_raci")),
+            payload.get("grm_strategy_raci", old.get("grm_strategy_raci")),
+            int(bool(payload.get("active_flag", old.get("active_flag", 1)))),
+            payload.get("maker_checker_comments", old.get("maker_checker_comments")),
+            utc_now(),
+            rule_id,
+        ),
+    )
+    insert_audit("RACI Rule", rule_id, "UPDATE", username, old, payload)
+
+
+def _active_users_for_role(role: str) -> list[dict[str, Any]]:
+    return fetch_all(
+        """
+        SELECT username, full_name, email, role
+        FROM user_profiles
+        WHERE role = ? AND active_flag = 1
+        ORDER BY username
+        """,
+        (role,),
+    )
+
+
+def _user_by_username(username: str | None) -> dict[str, Any] | None:
+    if not username:
+        return None
+    return fetch_one(
+        "SELECT username, full_name, email, role FROM user_profiles WHERE username = ? AND active_flag = 1",
+        (username,),
+    )
+
+
+def _raci_columns(rule: dict[str, Any]) -> dict[str, str | None]:
+    return {
+        "EUC Owner": rule.get("euc_owner_raci"),
+        "Data Validation Unit": rule.get("data_validation_unit_raci"),
+        "GCC": rule.get("gcc_raci"),
+        "Group IT Governance": rule.get("group_it_governance_raci"),
+        "IOF": rule.get("iof_raci"),
+        "Data Governance": rule.get("data_governance_raci"),
+        "Internal Audit": rule.get("internal_audit_raci"),
+        "GRM Strategy & Oversight / Projects (Group Finance)": rule.get("grm_strategy_raci"),
+    }
+
+
+def _raci_recipients(rule: dict[str, Any], euc: dict[str, Any] | None) -> list[dict[str, Any]]:
+    recipients: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for party, responsibility in _raci_columns(rule).items():
+        responsibility = str(responsibility or "-").strip()
+        if not responsibility or responsibility == "-":
+            continue
+        profiles: list[dict[str, Any]] = []
+        if party == "EUC Owner":
+            if euc:
+                owner_profile = _user_by_username(euc.get("owner"))
+                if owner_profile:
+                    profiles.append(owner_profile)
+                delegate_profile = _user_by_username(euc.get("owner_delegate"))
+                if delegate_profile:
+                    profiles.append(delegate_profile)
+        else:
+            mapped_role = RACI_PARTY_TO_PROFILE_ROLE.get(party)
+            if mapped_role:
+                profiles.extend(_active_users_for_role(mapped_role))
+        for profile in profiles:
+            key = (profile.get("username") or "", profile.get("email") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            recipients.append(
+                {
+                    "username": profile.get("username"),
+                    "email": profile.get("email"),
+                    "role": profile.get("role"),
+                    "raci_party": party,
+                    "raci_responsibility": responsibility,
+                }
+            )
+    return recipients
+
+
+def _insert_notification(
+    *,
+    event_type: str,
+    activity_decision: str | None,
+    entity_type: str,
+    entity_id: str | int,
+    euc_id: int | None,
+    reference_id: str | None,
+    subject: str,
+    body: str,
+    recipient_username: str | None,
+    recipient_email: str | None,
+    recipient_role: str | None,
+    raci_party: str | None,
+    raci_responsibility: str | None,
+    created_by: str,
+) -> int:
+    status = "Pending" if recipient_email else "No Email"
+    notification_id = execute(
+        """
+        INSERT INTO notification_outbox(
+            event_type, activity_decision, entity_type, entity_id, euc_id, reference_id, subject, body,
+            recipient_username, recipient_email, recipient_role, raci_party, raci_responsibility,
+            status, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event_type,
+            activity_decision,
+            entity_type,
+            str(entity_id),
+            euc_id,
+            reference_id,
+            subject,
+            body,
+            recipient_username,
+            recipient_email,
+            recipient_role,
+            raci_party,
+            raci_responsibility,
+            status,
+            created_by,
+            utc_now(),
+        ),
+    )
+    insert_audit("Notification", notification_id, "QUEUE", created_by, None, {"event_type": event_type, "recipient": recipient_email, "status": status})
+    return notification_id
+
+
+def queue_raci_notifications(
+    event_type: str,
+    entity_type: str,
+    entity_id: str | int,
+    euc_id: int | None,
+    triggered_by: str,
+    subject: str | None = None,
+    body: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> int:
+    """Queue RACI-based email actions in the local outbox.
+
+    The MVP does not require SMTP to be configured. Notifications are persisted
+    first and can then be sent through the optional SMTP sender.
+    """
+    rule = get_raci_rule(event_type)
+    if not rule:
+        return 0
+    euc = get_euc(euc_id) if euc_id else None
+    reference = euc.get("reference_id") if euc else None
+    euc_name = euc.get("name") if euc else "Portfolio / configuration"
+    subject = subject or f"[EUC Governance] {rule.get('activity_decision')} - {reference or entity_type}"
+    context = context or {}
+    default_body = [
+        "An EUC Governance action requires notification based on the configured RACI matrix.",
+        "",
+        f"Activity / decision: {rule.get('activity_decision')}",
+        f"Event type: {event_type}",
+        f"EUC: {reference or '-'} - {euc_name}",
+        f"Entity: {entity_type} #{entity_id}",
+        f"Triggered by: {triggered_by}",
+    ]
+    for key, value in context.items():
+        if value is not None and str(value).strip() != "":
+            default_body.append(f"{key}: {value}")
+    default_body.extend(["", "Please review the EUC Governance Monitoring App for details."])
+    body = body or "\n".join(default_body)
+
+    count = 0
+    for recipient in _raci_recipients(rule, euc):
+        recipient_body = body + f"\n\nRACI role: {recipient['raci_party']} = {recipient['raci_responsibility']}"
+        _insert_notification(
+            event_type=event_type,
+            activity_decision=rule.get("activity_decision"),
+            entity_type=entity_type,
+            entity_id=entity_id,
+            euc_id=euc_id,
+            reference_id=reference,
+            subject=subject,
+            body=recipient_body,
+            recipient_username=recipient.get("username"),
+            recipient_email=recipient.get("email"),
+            recipient_role=recipient.get("role"),
+            raci_party=recipient.get("raci_party"),
+            raci_responsibility=recipient.get("raci_responsibility"),
+            created_by=triggered_by,
+        )
+        count += 1
+    return count
+
+
+def queue_direct_notification(
+    *,
+    event_type: str,
+    entity_type: str,
+    entity_id: str | int,
+    euc_id: int | None,
+    triggered_by: str,
+    subject: str,
+    body: str,
+    recipient_username: str | None = None,
+    recipient_role: str | None = None,
+    raci_party: str | None = None,
+    raci_responsibility: str | None = None,
+) -> int:
+    recipients: list[dict[str, Any]] = []
+    if recipient_username:
+        profile = _user_by_username(recipient_username)
+        if profile:
+            recipients.append(profile)
+    if recipient_role:
+        recipients.extend(_active_users_for_role(recipient_role))
+    seen: set[tuple[str, str]] = set()
+    euc = get_euc(euc_id) if euc_id else None
+    count = 0
+    for profile in recipients:
+        key = (profile.get("username") or "", profile.get("email") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        _insert_notification(
+            event_type=event_type,
+            activity_decision="Direct task / workflow notification",
+            entity_type=entity_type,
+            entity_id=entity_id,
+            euc_id=euc_id,
+            reference_id=euc.get("reference_id") if euc else None,
+            subject=subject,
+            body=body,
+            recipient_username=profile.get("username"),
+            recipient_email=profile.get("email"),
+            recipient_role=profile.get("role"),
+            raci_party=raci_party or "Workflow assignee",
+            raci_responsibility=raci_responsibility or "Action owner",
+            created_by=triggered_by,
+        )
+        count += 1
+    return count
+
+
+def queue_task_notification(task_id: int, triggered_by: str) -> None:
+    task = fetch_one("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+    if not task:
+        return
+    euc = get_euc(task.get("euc_id")) if task.get("euc_id") else None
+    subject = f"[EUC Governance] Task assigned: {task.get('title')}"
+    body = "\n".join(
+        [
+            "A task has been assigned in the EUC Governance Monitoring App.",
+            "",
+            f"Task: {task.get('title')}",
+            f"Task type: {task.get('task_type')}",
+            f"Priority: {task.get('priority')}",
+            f"Due date: {task.get('due_date') or '-'}",
+            f"EUC: {(euc or {}).get('reference_id', '-') } - {(euc or {}).get('name', '-')}",
+            f"Created by: {triggered_by}",
+            "",
+            task.get("description") or "Please review and action this task.",
+        ]
+    )
+    queue_direct_notification(
+        event_type="TASK_ASSIGNED",
+        entity_type="Task",
+        entity_id=task_id,
+        euc_id=task.get("euc_id"),
+        triggered_by=triggered_by,
+        subject=subject,
+        body=body,
+        recipient_username=task.get("assigned_to"),
+        recipient_role=task.get("assigned_role") if not task.get("assigned_to") else None,
+    )
+
+
+def notification_outbox_table(filters: dict[str, Any] | None = None) -> pd.DataFrame:
+    filters = filters or {}
+    where = []
+    params: list[Any] = []
+    if filters.get("status") and filters["status"] != "All":
+        where.append("status = ?")
+        params.append(filters["status"])
+    if filters.get("event_type") and filters["event_type"] != "All":
+        where.append("event_type = ?")
+        params.append(filters["event_type"])
+    if filters.get("recipient"):
+        where.append("(recipient_username LIKE ? OR recipient_email LIKE ? OR recipient_role LIKE ?)")
+        pattern = f"%{filters['recipient']}%"
+        params.extend([pattern, pattern, pattern])
+    if filters.get("euc_id"):
+        where.append("euc_id = ?")
+        params.append(filters["euc_id"])
+    sql = "SELECT * FROM notification_outbox"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC, notification_id DESC"
+    return dataframe(sql, tuple(params))
+
+
+def notification_event_types() -> list[str]:
+    rows = fetch_all("SELECT DISTINCT event_type FROM raci_rules UNION SELECT DISTINCT event_type FROM notification_outbox ORDER BY event_type")
+    return [row["event_type"] for row in rows]
+
+
+def notification_statuses() -> list[str]:
+    rows = fetch_all("SELECT DISTINCT status FROM notification_outbox ORDER BY status")
+    return [row["status"] for row in rows] or ["Pending", "Sent", "Failed", "No Email", "Cancelled"]
+
+
+def update_notification_status(notification_id: int, status: str, username: str, error_message: str | None = None) -> None:
+    old = fetch_one("SELECT * FROM notification_outbox WHERE notification_id = ?", (notification_id,))
+    if not old:
+        raise ValueError("Notification not found")
+    execute(
+        """
+        UPDATE notification_outbox
+        SET status = ?, sent_at = CASE WHEN ? = 'Sent' THEN ? ELSE sent_at END, error_message = ?
+        WHERE notification_id = ?
+        """,
+        (status, status, utc_now(), error_message, notification_id),
+    )
+    insert_audit("Notification", notification_id, "STATUS_UPDATE", username, old, {"status": status, "error_message": error_message})
+
+
+def send_pending_notifications(limit: int, username: str) -> dict[str, int]:
+    """Send pending outbox entries through SMTP when configured.
+
+    Required environment variables: SMTP_HOST and SMTP_FROM. Optional variables:
+    SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_USE_TLS.
+    """
+    host = os.getenv("SMTP_HOST")
+    sender = os.getenv("SMTP_FROM")
+    if not host or not sender:
+        raise ValueError("SMTP_HOST and SMTP_FROM environment variables are required to send emails. Pending notifications remain in the outbox.")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    rows = fetch_all(
+        """
+        SELECT * FROM notification_outbox
+        WHERE status = 'Pending' AND recipient_email IS NOT NULL AND recipient_email <> ''
+        ORDER BY created_at ASC, notification_id ASC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    sent = failed = 0
+    context = ssl.create_default_context()
+    with smtplib.SMTP(host, port, timeout=30) as server:
+        if use_tls:
+            server.starttls(context=context)
+        if smtp_user and smtp_password:
+            server.login(smtp_user, smtp_password)
+        for row in rows:
+            msg = EmailMessage()
+            msg["From"] = sender
+            msg["To"] = row["recipient_email"]
+            msg["Subject"] = row["subject"]
+            msg.set_content(row["body"])
+            try:
+                server.send_message(msg)
+                update_notification_status(row["notification_id"], "Sent", username)
+                sent += 1
+            except Exception as exc:  # pragma: no cover - depends on external SMTP
+                update_notification_status(row["notification_id"], "Failed", username, str(exc))
+                failed += 1
+    return {"attempted": len(rows), "sent": sent, "failed": failed}
 
 def is_read_only(role: str) -> bool:
     return role == READ_ONLY_ROLE
@@ -603,6 +1087,14 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
         priority="Medium",
         username=username,
     )
+    queue_raci_notifications(
+        "EUC_REGISTERED",
+        "EUC",
+        euc_id,
+        euc_id,
+        username,
+        context={"Reference ID": reference_id, "Owner": payload.get("owner"), "Business unit": payload.get("business_unit")},
+    )
     return euc_id
 
 
@@ -645,6 +1137,14 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
     values.extend([utc_now(), euc_id])
     execute(f"UPDATE eucs SET {assignments}, updated_at = ? WHERE euc_id = ?", tuple(values))
     insert_audit("EUC", euc_id, "UPDATE", username, old, payload)
+    queue_raci_notifications(
+        "EUC_UPDATED",
+        "EUC",
+        euc_id,
+        euc_id,
+        username,
+        context={"Updated fields": ", ".join(sorted(payload.keys())) if isinstance(payload, dict) else "EUC record"},
+    )
 
 
 def update_euc_status(euc_id: int, lifecycle_status: str, username: str, overall_status: str | None = None) -> None:
@@ -654,6 +1154,8 @@ def update_euc_status(euc_id: int, lifecycle_status: str, username: str, overall
         (lifecycle_status, overall_status or lifecycle_status, utc_now(), euc_id),
     )
     insert_audit("EUC", euc_id, "STATUS_TRANSITION", username, old, {"lifecycle_status": lifecycle_status})
+    if lifecycle_status == "Industrialization Candidate":
+        queue_raci_notifications("INDUSTRIALIZATION_REQUESTED", "EUC", euc_id, euc_id, username, context={"Lifecycle status": lifecycle_status})
 
 
 def get_components(euc_id: int) -> pd.DataFrame:
@@ -697,6 +1199,7 @@ def update_component(component_id: int, payload: dict[str, Any], username: str) 
     values.append(component_id)
     execute(f"UPDATE components SET {assignments} WHERE component_id = ?", tuple(values))
     insert_audit("Component", component_id, "UPDATE", username, old, payload)
+    queue_raci_notifications("EUC_COMPONENT_UPDATED", "Component", component_id, old.get("euc_id"), username, context={"Component": payload.get("component_name", old.get("component_name"))})
 
 
 def get_risk_assessments(euc_id: int) -> pd.DataFrame:
@@ -821,6 +1324,14 @@ def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
         (inherent_risk, residual_risk, lifecycle, lifecycle, utc_now(), payload["euc_id"]),
     )
     insert_audit("Risk Assessment", assessment_id, "CREATE", username, None, {**payload, **calculated, "inherent_risk": inherent_risk, "residual_risk": residual_risk})
+    queue_raci_notifications(
+        "RISK_ASSESSMENT_COMPLETED",
+        "Risk Assessment",
+        assessment_id,
+        payload["euc_id"],
+        username,
+        context={"Overall inherent risk": inherent_risk, "Overall residual risk": residual_risk, "Version": version},
+    )
     evaluate_and_update_completeness(payload["euc_id"], username, create_missing_tasks=True)
     return assessment_id
 
@@ -873,6 +1384,14 @@ def create_document_record(payload: dict[str, Any], username: str) -> int:
         ),
     )
     insert_audit("Document", document_id, "UPLOAD", username, None, payload)
+    queue_raci_notifications(
+        "EVIDENCE_SUBMITTED",
+        "Document",
+        document_id,
+        payload["euc_id"],
+        username,
+        context={"Document type": payload.get("document_type"), "Status": payload.get("status", "Submitted")},
+    )
     evaluate_and_update_completeness(payload["euc_id"], username, create_missing_tasks=False)
     return document_id
 
@@ -897,6 +1416,14 @@ def review_document(document_id: int, status: str, comments: str, deficiency_tag
     )
     action = "ACCEPT" if status == "Accepted" else "REJECT" if status == "Rejected" else "REVIEW"
     insert_audit("Document", document_id, action, username, old, {"status": status, "comments": comments, "deficiency_tag": deficiency_tag})
+    queue_raci_notifications(
+        "EVIDENCE_REVIEWED",
+        "Document",
+        document_id,
+        old["euc_id"],
+        username,
+        context={"Document type": old.get("document_type"), "Review status": status, "Deficiency": deficiency_tag},
+    )
     if status == "Rejected":
         create_task(
             euc_id=old["euc_id"],
@@ -1083,25 +1610,55 @@ def create_task(
         (euc_id, task_type, title, description, assigned_to, assigned_role, due_date, status, priority, utc_now()),
     )
     insert_audit("Task", task_id, "CREATE", username, None, {"title": title, "assigned_to": assigned_to, "assigned_role": assigned_role})
+    queue_task_notification(task_id, username)
     return task_id
 
 
 def get_tasks(role: str | None = None, username: str | None = None, open_only: bool = False) -> pd.DataFrame:
+    """Return tasks with the correct UI scope.
+
+    When called without a role/username, this function intentionally returns the
+    portfolio task set for governance monitoring/reporting pages. When called
+    from the Tasks & Remediation page with the logged-in context, it returns only
+    records that are relevant to that user:
+
+    * direct assignments to the username;
+    * role-queue assignments for central workflow roles;
+    * tasks on EUCs owned/delegated/created by the user;
+    * for EUC Owner/Contributor role queues, only role tasks linked to that
+      user's own/delegated/created EUCs, so one owner does not see every task
+      assigned to the generic "EUC Owner" role.
+    """
     where = []
     params: list[Any] = []
     if open_only:
         where.append("t.status IN ('Open','In Progress','Blocked','Closure Requested')")
-    if role and username and not can_view_all(role):
-        where.append("(t.assigned_to = ? OR t.assigned_role = ?)")
-        params.extend([username, role])
-    elif role == APPROVER_ROLE:
-        where.append("(t.assigned_role = ? OR t.assigned_to = ?)")
-        params.extend([role, username])
+
+    if role and username:
+        personal_euc_sql = "(e.owner = ? OR e.owner_delegate = ? OR e.created_by = ?)"
+        if role in {GCC_ROLE, DVU_ROLE, ADMIN_ROLE, APPROVER_ROLE}:
+            # Central roles see tasks assigned directly to them or to their
+            # role queue, not every task in the database. Portfolio-wide task
+            # views call get_tasks without a user context.
+            where.append("(t.assigned_to = ? OR t.assigned_role = ?)")
+            params.extend([username, role])
+        else:
+            where.append(
+                "("
+                "t.assigned_to = ? "
+                "OR " + personal_euc_sql + " "
+                "OR (t.assigned_role = ? AND " + personal_euc_sql + ")"
+                ")"
+            )
+            params.extend([username, username, username, username, role, username, username, username])
+
     sql = """
         SELECT t.*, e.reference_id, e.name AS euc_name, e.owner, e.residual_risk,
+               up.full_name AS assigned_full_name, up.email AS assigned_email,
                CASE WHEN t.due_date IS NOT NULL AND date(t.due_date) < date('now') AND t.status NOT IN ('Closed','Cancelled') THEN 1 ELSE 0 END AS overdue
         FROM tasks t
         LEFT JOIN eucs e ON e.euc_id = t.euc_id
+        LEFT JOIN user_profiles up ON up.username = t.assigned_to
     """
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -1123,6 +1680,33 @@ def update_task(task_id: int, status: str, closure_reason: str | None, evidence_
         (status, closure_reason, evidence_document_id, closed_at, task_id),
     )
     insert_audit("Task", task_id, "UPDATE", username, old, {"status": status, "closure_reason": closure_reason})
+    queue_direct_notification(
+        event_type="TASK_UPDATED",
+        entity_type="Task",
+        entity_id=task_id,
+        euc_id=old.get("euc_id"),
+        triggered_by=username,
+        subject=f"[EUC Governance] Task updated: {old.get('title')}",
+        body=f"Task status changed to {status}. Closure reason: {closure_reason or '-'}",
+        recipient_username=old.get("assigned_to"),
+        recipient_role=old.get("assigned_role") if not old.get("assigned_to") else None,
+    )
+
+
+def update_task_admin_fields(task_id: int, due_date: str | None, priority: str | None, username: str) -> None:
+    """Update non-closure task fields from the selected task edit form."""
+    old = fetch_one("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+    if not old:
+        raise ValueError("Task not found")
+    execute(
+        """
+        UPDATE tasks
+        SET due_date = ?, priority = ?
+        WHERE task_id = ?
+        """,
+        (due_date, priority, task_id),
+    )
+    insert_audit("Task", task_id, "UPDATE", username, old, {"due_date": due_date, "priority": priority})
 
 
 def create_review(payload: dict[str, Any], username: str, role: str) -> int:
@@ -1147,6 +1731,14 @@ def create_review(payload: dict[str, Any], username: str, role: str) -> int:
         ),
     )
     insert_audit("Review", review_id, "CREATE", username, None, payload)
+    queue_raci_notifications(
+        "INDEPENDENT_REVIEW_COMPLETED",
+        "Review",
+        review_id,
+        payload["euc_id"],
+        username,
+        context={"Review type": payload.get("review_type", "Data Validation"), "Outcome": payload.get("outcome")},
+    )
     outcome = payload["outcome"]
     if outcome == "Accepted":
         update_euc_status(payload["euc_id"], "Active", username, "Active")
@@ -1199,6 +1791,14 @@ def create_finding(payload: dict[str, Any], username: str) -> int:
         ),
     )
     insert_audit("Finding", finding_id, "CREATE", username, None, payload)
+    queue_raci_notifications(
+        "FINDING_RAISED",
+        "Finding",
+        finding_id,
+        payload["euc_id"],
+        username,
+        context={"Severity": payload.get("severity"), "Requirement": payload.get("requirement"), "Assigned to": payload.get("assigned_to")},
+    )
     euc = get_euc(payload["euc_id"])
     update_euc_status(payload["euc_id"], "Under Remediation", username, "Under remediation")
     create_task(
@@ -1290,6 +1890,14 @@ def create_exception(payload: dict[str, Any], username: str) -> int:
         ),
     )
     insert_audit("Exception", exception_id, "CREATE", username, None, payload)
+    queue_raci_notifications(
+        "EXCEPTION_RAISED",
+        "Exception",
+        exception_id,
+        payload["euc_id"],
+        username,
+        context={"Control gap": payload.get("control_gap"), "Residual risk": payload.get("residual_risk"), "Approval status": payload.get("approval_status", "Pending")},
+    )
     update_euc_status(payload["euc_id"], "Exception Active", username, "Exception active")
     create_task(
         euc_id=payload["euc_id"],
@@ -1315,6 +1923,14 @@ def approve_exception(exception_id: int, approval_status: str, approved_by: str)
         (approval_status, approved_by, status, exception_id),
     )
     insert_audit("Exception", exception_id, "APPROVAL", approved_by, old, {"approval_status": approval_status})
+    queue_raci_notifications(
+        "EXCEPTION_DECISION",
+        "Exception",
+        exception_id,
+        old.get("euc_id"),
+        approved_by,
+        context={"Approval status": approval_status, "Approved by": approved_by},
+    )
 
 
 def get_incidents(euc_id: int | None = None, open_only: bool = False) -> pd.DataFrame:
@@ -1357,6 +1973,14 @@ def create_incident(payload: dict[str, Any], username: str) -> int:
         ),
     )
     insert_audit("Incident", incident_id, "CREATE", username, None, payload)
+    queue_raci_notifications(
+        "INCIDENT_LOGGED",
+        "Incident",
+        incident_id,
+        payload["euc_id"],
+        username,
+        context={"Incident date": payload.get("incident_date"), "Affected outputs": payload.get("affected_outputs"), "Status": payload.get("status", "Open")},
+    )
     euc = get_euc(payload["euc_id"])
     update_euc_status(payload["euc_id"], "Incident Open", username, "Incident open")
     create_task(payload["euc_id"], "Reassessment", f"Reassess EUC after incident {incident_id}", payload.get("impact_summary"), euc.get("owner") if euc else None, OWNER_ROLE, add_days(DEFAULT_DUE_DAYS["Reassessment"]), "High", username)
@@ -1397,6 +2021,14 @@ def create_material_change(payload: dict[str, Any], username: str) -> int:
         ),
     )
     insert_audit("Material Change", change_id, "CREATE", username, None, payload)
+    queue_raci_notifications(
+        "MATERIAL_CHANGE_LOGGED",
+        "Material Change",
+        change_id,
+        payload["euc_id"],
+        username,
+        context={"Change type": payload.get("change_type"), "Reassessment required": payload.get("reassessment_required"), "Documentation refresh required": payload.get("documentation_refresh_required")},
+    )
     euc = get_euc(payload["euc_id"])
     update_euc_status(payload["euc_id"], "Under Change", username, "Under change")
     if payload.get("reassessment_required"):
@@ -1621,6 +2253,14 @@ def upsert_reference_value(category: str, value: str, username: str, comments: s
         (category, value, comments, username, username),
     )
     insert_audit("Reference Data", f"{category}:{value}", "UPSERT", username, None, {"category": category, "value": value})
+    queue_raci_notifications(
+        "REFERENCE_DATA_UPDATED",
+        "Reference Data",
+        f"{category}:{value}",
+        None,
+        username,
+        context={"Category": category, "Value": value},
+    )
 
 
 def upsert_required_rule(payload: dict[str, Any], username: str) -> int:
@@ -1645,6 +2285,14 @@ def upsert_required_rule(payload: dict[str, Any], username: str) -> int:
         ),
     )
     insert_audit("Required Artifact Rule", rule_id, "CREATE", username, None, payload)
+    queue_raci_notifications(
+        "ARTIFACT_RULE_UPDATED",
+        "Required Artifact Rule",
+        rule_id,
+        None,
+        username,
+        context={"Risk level": payload.get("risk_level"), "Document type": payload.get("required_document_type")},
+    )
     return rule_id
 
 
@@ -1659,6 +2307,7 @@ def due_date_rules_table() -> pd.DataFrame:
 def initialize_reference_data(username: str = "system") -> None:
     seed_required_rules(username)
     seed_user_profiles(username)
+    seed_raci_rules(username)
     constants = {
         "document_type": DOCUMENT_TYPES,
         "lifecycle_status": LIFECYCLE_STATUSES,
