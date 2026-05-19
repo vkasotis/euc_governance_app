@@ -1333,6 +1333,7 @@ def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
         context={"Overall inherent risk": inherent_risk, "Overall residual risk": residual_risk, "Version": version},
     )
     evaluate_and_update_completeness(payload["euc_id"], username, create_missing_tasks=True)
+    auto_close_tasks_for_risk_assessment(payload["euc_id"], assessment_id, username)
     return assessment_id
 
 
@@ -1393,6 +1394,7 @@ def create_document_record(payload: dict[str, Any], username: str) -> int:
         context={"Document type": payload.get("document_type"), "Status": payload.get("status", "Submitted")},
     )
     evaluate_and_update_completeness(payload["euc_id"], username, create_missing_tasks=False)
+    auto_close_tasks_for_document_submission(payload["euc_id"], document_id, payload.get("document_type"), username)
     return document_id
 
 
@@ -1436,6 +1438,8 @@ def review_document(document_id: int, status: str, comments: str, deficiency_tag
             priority="High",
             username=username,
         )
+    elif status == "Accepted":
+        auto_close_tasks_for_document_submission(old["euc_id"], document_id, old.get("document_type"), username)
     evaluate_and_update_completeness(old["euc_id"], username, create_missing_tasks=True)
 
 
@@ -1612,6 +1616,156 @@ def create_task(
     insert_audit("Task", task_id, "CREATE", username, None, {"title": title, "assigned_to": assigned_to, "assigned_role": assigned_role})
     queue_task_notification(task_id, username)
     return task_id
+
+
+def _matches_any_text(row: dict[str, Any], tokens: list[str] | None) -> bool:
+    """Return True when no token filter is supplied or any token appears in task text."""
+    if not tokens:
+        return True
+    text = " ".join(str(row.get(field) or "") for field in ("task_type", "title", "description")).lower()
+    return any(str(token or "").lower() in text for token in tokens if str(token or "").strip())
+
+
+def close_task_if_open(
+    task_id: int,
+    username: str,
+    closure_reason: str,
+    evidence_document_id: int | None = None,
+    action: str = "AUTO_CLOSE",
+) -> bool:
+    """Close a task once the underlying business action has been completed.
+
+    The task is not deleted. It is closed with a business reason and an audit
+    entry, so the control trail remains intact.
+    """
+    old = fetch_one("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+    if not old or old.get("status") in {"Closed", "Cancelled"}:
+        return False
+
+    final_evidence_id = evidence_document_id if evidence_document_id is not None else old.get("closure_evidence_document_id")
+    existing_reason = old.get("closure_reason")
+    reason = closure_reason if not existing_reason else f"{existing_reason}\n{closure_reason}"
+    execute(
+        """
+        UPDATE tasks
+        SET status = 'Closed', closure_reason = ?, closure_evidence_document_id = ?, closed_at = ?
+        WHERE task_id = ?
+        """,
+        (reason, final_evidence_id, utc_now(), task_id),
+    )
+    insert_audit("Task", task_id, action, username, old, {"status": "Closed", "closure_reason": closure_reason, "closure_evidence_document_id": final_evidence_id})
+    queue_direct_notification(
+        event_type="TASK_AUTO_CLOSED",
+        entity_type="Task",
+        entity_id=task_id,
+        euc_id=old.get("euc_id"),
+        triggered_by=username,
+        subject=f"[EUC Governance] Task auto-closed: {old.get('title')}",
+        body=f"The task was automatically closed because the underlying action was completed. Reason: {closure_reason}",
+        recipient_username=old.get("assigned_to"),
+        recipient_role=old.get("assigned_role") if not old.get("assigned_to") else None,
+    )
+    return True
+
+
+def auto_close_tasks(
+    euc_id: int | None,
+    username: str,
+    task_types: list[str],
+    closure_reason: str,
+    title_or_description_tokens: list[str] | None = None,
+    evidence_document_id: int | None = None,
+) -> int:
+    """Close open tasks for an EUC when the user completes the related action."""
+    if not euc_id or not task_types:
+        return 0
+    placeholders = ",".join("?" for _ in task_types)
+    rows = fetch_all(
+        f"""
+        SELECT * FROM tasks
+        WHERE euc_id = ?
+          AND task_type IN ({placeholders})
+          AND status IN ('Open','In Progress','Blocked','Closure Requested')
+        """,
+        tuple([euc_id, *task_types]),
+    )
+    closed = 0
+    for row in rows:
+        if _matches_any_text(row, title_or_description_tokens):
+            if close_task_if_open(int(row["task_id"]), username, closure_reason, evidence_document_id=evidence_document_id):
+                closed += 1
+    return closed
+
+
+def auto_close_tasks_for_risk_assessment(euc_id: int, assessment_id: int, username: str) -> int:
+    """Close risk-assessment tasks once an assessment version is submitted."""
+    reason = f"Auto-closed because risk assessment #{assessment_id} was completed for this EUC."
+    closed = auto_close_tasks(
+        euc_id=euc_id,
+        username=username,
+        task_types=["Risk assessment", "Reassessment"],
+        closure_reason=reason,
+        title_or_description_tokens=["risk assessment", "reassess", "reassessment"],
+    )
+    closed += auto_close_tasks(
+        euc_id=euc_id,
+        username=username,
+        task_types=["Missing evidence"],
+        closure_reason=reason,
+        title_or_description_tokens=["risk assessment"],
+    )
+    return closed
+
+
+def auto_close_tasks_for_document_submission(euc_id: int, document_id: int, document_type: str, username: str) -> int:
+    """Close evidence-submission tasks once the requested evidence is uploaded."""
+    doc_type = document_type or "document"
+    reason = f"Auto-closed because {doc_type} evidence was uploaded as document #{document_id}."
+    closed = auto_close_tasks(
+        euc_id=euc_id,
+        username=username,
+        task_types=["Document submission"],
+        closure_reason=reason,
+        evidence_document_id=document_id,
+    )
+    closed += auto_close_tasks(
+        euc_id=euc_id,
+        username=username,
+        task_types=["Missing evidence", "Closure evidence"],
+        closure_reason=reason,
+        title_or_description_tokens=[doc_type, "evidence"],
+        evidence_document_id=document_id,
+    )
+    if doc_type in {"Operating Procedure", "Library of Controls", "Review Evidence", "Testing Evidence", "Reconciliation Evidence", "Resilience Evidence"}:
+        closed += auto_close_tasks(
+            euc_id=euc_id,
+            username=username,
+            task_types=["Documentation refresh"],
+            closure_reason=reason,
+            title_or_description_tokens=["documentation", "refresh", doc_type],
+            evidence_document_id=document_id,
+        )
+    return closed
+
+
+def auto_close_tasks_for_exception_decision(euc_id: int | None, exception_id: int, username: str, approval_status: str) -> int:
+    return auto_close_tasks(
+        euc_id=euc_id,
+        username=username,
+        task_types=["Review response"],
+        closure_reason=f"Auto-closed because exception #{exception_id} was {approval_status.lower()}.",
+        title_or_description_tokens=[f"exception {exception_id}", "approve or reject exception"],
+    )
+
+
+def auto_close_tasks_for_finding_closure(euc_id: int | None, finding_id: int, username: str) -> int:
+    return auto_close_tasks(
+        euc_id=euc_id,
+        username=username,
+        task_types=["Remediation"],
+        closure_reason=f"Auto-closed because finding #{finding_id} was closed.",
+        title_or_description_tokens=[f"finding {finding_id}", "remediate finding"],
+    )
 
 
 def get_tasks(role: str | None = None, username: str | None = None, open_only: bool = False) -> pd.DataFrame:
@@ -1843,6 +1997,8 @@ def update_finding(finding_id: int, status: str, closure_comments: str, username
         (status, closure_comments, closed_at, finding_id),
     )
     insert_audit("Finding", finding_id, "UPDATE", username, old, {"status": status, "closure_comments": closure_comments})
+    if status == "Closed":
+        auto_close_tasks_for_finding_closure(old.get("euc_id"), finding_id, username)
 
 
 def get_exceptions(euc_id: int | None = None, open_only: bool = False) -> pd.DataFrame:
@@ -1931,6 +2087,7 @@ def approve_exception(exception_id: int, approval_status: str, approved_by: str)
         approved_by,
         context={"Approval status": approval_status, "Approved by": approved_by},
     )
+    auto_close_tasks_for_exception_decision(old.get("euc_id"), exception_id, approved_by, approval_status)
 
 
 def get_incidents(euc_id: int | None = None, open_only: bool = False) -> pd.DataFrame:

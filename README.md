@@ -259,3 +259,16 @@ SMTP_USE_TLS=true
 ```
 
 When SMTP is not configured, notifications remain in `Pending` status and can be exported or manually statused from the `Email Notifications` page.
+
+## Automated task closure
+
+The MVP now auto-closes workflow tasks when the underlying user action is completed:
+
+- Submitting a risk assessment closes open Risk assessment / Reassessment tasks for the EUC.
+- Completing the Risk Assessment module also satisfies and closes missing Risk Assessment evidence tasks.
+- Uploading evidence closes the relevant Document submission / Missing evidence / Closure evidence task where the task text matches the uploaded document type.
+- Accepting evidence repeats the closure check in case the workflow expects reviewer acceptance.
+- Approving or rejecting an exception closes the related exception-approval task.
+- Closing a finding closes the matching remediation task.
+
+All automated closures write an audit-trail entry with action `AUTO_CLOSE` and queue a task-update notification where the notification outbox is enabled.
