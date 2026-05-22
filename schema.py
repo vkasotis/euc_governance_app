@@ -175,6 +175,18 @@ DOCUMENT_TYPES = [
     "Exception Record",
     "Incident Evidence",
     "Decommissioning Evidence",
+    "Versioning / Change Log Evidence",
+    "Design / Logic Evidence",
+    "Control Evidence",
+    "Access Review Evidence",
+    "Evidence Pack Index",
+    "Change Evidence",
+    "Incident RCA Evidence",
+    "Containment / Correction Evidence",
+    "Exception Closure Evidence",
+    "Archive Evidence",
+    "Access Revocation Evidence",
+    "Industrialization Assessment Evidence",
 ]
 
 DOCUMENT_STATUSES = [
@@ -239,25 +251,44 @@ REFERENCE_CATEGORIES = [
 ]
 
 DEFAULT_REQUIRED_ARTIFACTS = {
-    "Low": ["Risk Assessment", "Operating Procedure"],
-    "Medium": ["Risk Assessment", "Operating Procedure", "Library of Controls", "Review Evidence"],
+    # These policy baselines are driven by Overall Inherent Risk.
+    # Residual risk drives remediation, escalation and exception handling, not a reduction of the evidence baseline.
+    "Low": [
+        "Risk Assessment",
+        "Operating Procedure",
+    ],
+    "Medium": [
+        "Risk Assessment",
+        "Operating Procedure",
+        "Versioning / Change Log Evidence",
+        "Control Evidence",
+        "Review Evidence",
+    ],
     "High": [
         "Risk Assessment",
         "Operating Procedure",
         "Library of Controls",
+        "Versioning / Change Log Evidence",
         "Testing Evidence",
         "Reconciliation Evidence",
         "Review Evidence",
+        "Access Review Evidence",
+        "Resilience Evidence",
     ],
     "Very High": [
         "Risk Assessment",
         "Operating Procedure",
         "Library of Controls",
+        "Versioning / Change Log Evidence",
+        "Design / Logic Evidence",
         "Testing Evidence",
+        "UAT Evidence",
         "Reconciliation Evidence",
         "Resilience Evidence",
         "Review Evidence",
         "Approval Evidence",
+        "Access Review Evidence",
+        "Evidence Pack Index",
     ],
 }
 

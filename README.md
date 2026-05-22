@@ -292,3 +292,25 @@ After a purge, automatic demo reseeding is disabled until the seed loader is run
 ## Document access note
 
 Uploaded evidence is stored locally under `uploads/`. The UI uses Streamlit download buttons for Office and other binary evidence so that the browser receives the original bytes with an appropriate file name/extension. Browser previews are shown only for previewable formats such as PDF, images, text, CSV, JSON, and XML.
+
+## Patch 20 - automatic documentation lifecycle synchronization
+
+When the Required Artifact Checklist is recalculated or when relevant actions occur, the app now synchronizes the EUC master record automatically:
+
+- all mandatory artifacts accepted or internally satisfied -> `documentation_completeness_status = Complete` and eligible pre-review EUCs move to `Review Ready`;
+- missing, rejected, or expired mandatory artifacts -> `documentation_completeness_status = Incomplete` and eligible pre-review EUCs remain or move to `Awaiting Documentation`;
+- submitted but not yet accepted mandatory artifacts -> `documentation_completeness_status = Submitted - Pending Review` and eligible pre-review EUCs remain or move to `Awaiting Documentation`.
+
+The synchronization avoids overriding protected governance statuses such as `Active`, `Under Remediation`, `Exception Active`, `Incident Open`, `Under Change`, `Industrialization Candidate`, `Decommissioned`, and `Archived`.
+
+## Patch 21 - policy-correct artifact baseline
+
+The Required Artifact Checklist now follows the policy/control matrix interpretation:
+
+- required evidence baseline is driven by **Overall Inherent Risk**;
+- BCBS 239 materiality applies the **Very High** inherent-risk baseline, even where residual risk is reduced to Medium by strong controls;
+- residual risk no longer reduces the evidence baseline;
+- residual risk now drives remediation, escalation and exception-related workflow tasks;
+- event-driven overlays add targeted requirements for SPOF, incidents, material changes, exceptions, industrialization candidates and decommissioning.
+
+The Admin Configuration required-artifact rule label was updated to clarify that risk level refers to the **Overall inherent risk baseline**. Existing administrator rules are still used, but the policy default baseline is always included so older local databases do not retain a residual-risk-only checklist.

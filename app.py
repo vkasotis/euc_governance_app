@@ -861,6 +861,11 @@ def page_documents() -> None:
         return
 
     st.subheader("Required artifact checklist")
+    baseline = svc.inherent_baseline_for_euc(euc["euc_id"])
+    st.caption(
+        f"Required artifacts are driven by the policy baseline: **{baseline['baseline_risk']} Overall Inherent Risk** "
+        f"({baseline['source']}). Residual risk drives remediation, escalation and exceptions; it does not reduce the baseline evidence pack."
+    )
     # Synchronize documentation completeness/lifecycle before showing the checklist.
     svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
     checklist = svc.artifact_checklist(euc["euc_id"])
@@ -964,7 +969,14 @@ def page_checklist() -> None:
     # "Awaiting Documentation" after all mandatory artifacts have been accepted.
     svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
     euc = svc.get_euc(euc["euc_id"]) or euc
-    st.markdown(f"Residual risk: **{badge(euc['residual_risk'])}** · Lifecycle: **{badge(euc['lifecycle_status'])}** · Documentation: **{badge(euc.get('documentation_completeness_status'))}**")
+    baseline = svc.inherent_baseline_for_euc(euc["euc_id"])
+    st.markdown(
+        f"Inherent baseline: **{badge(baseline['baseline_risk'])}** · "
+        f"Residual risk: **{badge(euc['residual_risk'])}** · "
+        f"Lifecycle: **{badge(euc['lifecycle_status'])}** · "
+        f"Documentation: **{badge(euc.get('documentation_completeness_status'))}**"
+    )
+    st.caption("Checklist baseline follows Overall Inherent Risk / BCBS 239 materiality. Residual risk is used for remediation, escalation and exception handling.")
     checklist = svc.artifact_checklist(euc["euc_id"])
     safe_df(checklist, height=350)
     c1, c2 = st.columns(2)
@@ -1415,7 +1427,7 @@ def page_admin() -> None:
         safe_df(svc.required_rules_table(), height=320)
         with st.form("add_rule"):
             c1, c2, c3 = st.columns(3)
-            risk = c1.selectbox("Risk level", RISK_LEVELS)
+            risk = c1.selectbox("Overall inherent risk baseline", RISK_LEVELS)
             lifecycle = c2.selectbox("Lifecycle stage", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, "Active"))
             doc_type = c3.selectbox("Required document type", DOCUMENT_TYPES)
             control = c1.selectbox("Control area", CONTROL_AREAS)

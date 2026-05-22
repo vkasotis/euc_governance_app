@@ -1485,12 +1485,57 @@ def review_document(document_id: int, status: str, comments: str, deficiency_tag
     evaluate_and_update_completeness(old["euc_id"], username, create_missing_tasks=True)
 
 
+def _default_rule_metadata(doc_type: str) -> tuple[str, str]:
+    """Return control area and CACRT dimension for a required artifact.
+
+    These are used for seeded/default rules and event-driven overlays. They are
+    descriptive tags for the checklist; the requirement driver remains the
+    policy baseline and lifecycle/event condition.
+    """
+    if doc_type in {"Operating Procedure", "Evidence Pack Index"}:
+        return "Ownership & Accountability", "Traceability"
+    if doc_type in {"Library of Controls", "Control Evidence"}:
+        return "Reconciliation & Controls", "Completeness"
+    if doc_type in {"Testing Evidence", "UAT Evidence", "Design / Logic Evidence"}:
+        return "Data Validation", "Accuracy"
+    if doc_type in {"Reconciliation Evidence"}:
+        return "Reconciliation & Controls", "Reasonableness"
+    if doc_type in {"Resilience Evidence", "Containment / Correction Evidence"}:
+        return "Operational Resilience", "Timeliness"
+    if doc_type in {"Versioning / Change Log Evidence", "Change Evidence"}:
+        return "Change Management", "Consistency"
+    if doc_type in {"Access Review Evidence", "Access Revocation Evidence"}:
+        return "Access Control", "Traceability"
+    if doc_type in {"Exception Record", "Exception Closure Evidence", "Incident Evidence", "Incident RCA Evidence"}:
+        return "Issue Management", "Traceability"
+    if doc_type in {"Decommissioning Evidence", "Archive Evidence"}:
+        return "Decommissioning", "Traceability"
+    if doc_type in {"Approval Evidence", "Review Evidence", "Industrialization Assessment Evidence"}:
+        return "Ownership & Accountability", "Traceability"
+    return "Ownership & Accountability", "Completeness"
+
+
 def seed_required_rules(username: str = "system") -> None:
-    existing = fetch_one("SELECT COUNT(*) AS n FROM required_artifact_rules")
-    if existing and int(existing["n"]) > 0:
-        return
+    """Seed or top-up approved artifact rules.
+
+    The rules are interpreted as an Overall Inherent Risk baseline. Existing
+    deployments may already have the old residual-risk interpretation, so this
+    function inserts any newly-required policy baseline artifacts without
+    deleting administrator-maintained rules.
+    """
     for risk, docs in DEFAULT_REQUIRED_ARTIFACTS.items():
         for doc_type in docs:
+            existing = fetch_one(
+                """
+                SELECT rule_id FROM required_artifact_rules
+                WHERE risk_level = ? AND required_document_type = ? AND lifecycle_stage = 'Active'
+                LIMIT 1
+                """,
+                (risk, doc_type),
+            )
+            if existing:
+                continue
+            control_area, cacrt_dimension = _default_rule_metadata(doc_type)
             execute(
                 """
                 INSERT INTO required_artifact_rules(
@@ -1502,10 +1547,10 @@ def seed_required_rules(username: str = "system") -> None:
                     risk,
                     "Active",
                     doc_type,
-                    "Reconciliation & Controls" if "Reconciliation" in doc_type else "Ownership & Accountability",
-                    "Completeness",
+                    control_area,
+                    cacrt_dimension,
                     1,
-                    "Default MVP rule loaded during initialization.",
+                    "Default policy baseline rule loaded during initialization. Risk level refers to Overall Inherent Risk.",
                     username,
                     username,
                     "Approved",
@@ -1513,33 +1558,177 @@ def seed_required_rules(username: str = "system") -> None:
             )
 
 
+def _latest_assessment_row(euc_id: int) -> dict[str, Any] | None:
+    return fetch_one(
+        """
+        SELECT * FROM risk_assessments
+        WHERE euc_id = ?
+        ORDER BY version DESC, assessment_id DESC
+        LIMIT 1
+        """,
+        (euc_id,),
+    )
+
+
+def _is_material_bcbs_assessment(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    if str(row.get("materially_supports_bcbs239") or "").strip().lower() == "yes":
+        return True
+    return any(str(row.get(col) or "").strip().lower() == "yes" for col in ("materiality_q1", "materiality_q2", "materiality_q3"))
+
+
+def inherent_baseline_for_euc(euc_id: int) -> dict[str, Any]:
+    """Determine the policy baseline for evidence requirements.
+
+    Per the policy/control matrix, mandatory control and evidence requirements
+    are driven by Overall Inherent Risk. Residual Risk is kept for remediation,
+    escalation and exception handling. BCBS 239 materiality forces the Very High
+    baseline even when residual risk is Medium because controls are strong.
+    """
+    euc = get_euc(euc_id)
+    if not euc:
+        return {"baseline_risk": "Medium", "material_bcbs239": False, "source": "default", "assessment_id": None}
+    latest = _latest_assessment_row(euc_id)
+    material = _is_material_bcbs_assessment(latest)
+    candidates = [euc.get("inherent_risk") or "Medium"]
+    if latest:
+        candidates.append(latest.get("overall_inherent_risk") or latest.get("inherent_risk") or "Medium")
+    baseline = "Very High" if material else _max_risk(candidates)
+    return {
+        "baseline_risk": baseline,
+        "material_bcbs239": material,
+        "source": "BCBS 239 materiality override" if material else "Overall Inherent Risk",
+        "assessment_id": latest.get("assessment_id") if latest else None,
+    }
+
+
+def _append_requirement(rows: list[dict[str, Any]], seen: set[str], risk_level: str, lifecycle_stage: str | None, doc_type: str, reason: str, mandatory: bool = True) -> None:
+    if doc_type in seen:
+        return
+    control_area, cacrt_dimension = _default_rule_metadata(doc_type)
+    rows.append(
+        {
+            "risk_level": risk_level,
+            "risk_basis": "Overall Inherent Risk",
+            "lifecycle_stage": lifecycle_stage or "Active",
+            "required_document_type": doc_type,
+            "control_area": control_area,
+            "cacrt_dimension": cacrt_dimension,
+            "mandatory_flag": int(bool(mandatory)),
+            "requirement_reason": reason,
+        }
+    )
+    seen.add(doc_type)
+
+
+def _event_overlay_requirements(euc: dict[str, Any], baseline_risk: str) -> list[tuple[str, str, str]]:
+    """Return additional policy requirements driven by lifecycle events/states.
+
+    Tuple: (document_type, lifecycle_stage, reason)
+    """
+    euc_id = int(euc["euc_id"])
+    overlays: list[tuple[str, str, str]] = []
+    spof = str(euc.get("spof_indicator") or "").strip().lower() == "yes"
+    lifecycle = euc.get("lifecycle_status") or "Active"
+
+    if spof:
+        overlays.append(("Resilience Evidence", lifecycle, "SPOF indicator is Yes; backup, fallback and deputy-cover evidence is required."))
+
+    open_incidents = get_incidents(euc_id, open_only=True)
+    if not open_incidents.empty or lifecycle == "Incident Open":
+        overlays.extend([
+            ("Incident Evidence", "Incident Open", "Open incident or near miss requires incident evidence."),
+            ("Incident RCA Evidence", "Incident Open", "Incident handling requires root-cause analysis evidence."),
+            ("Containment / Correction Evidence", "Incident Open", "Incident handling requires containment/correction evidence."),
+            ("Operating Procedure", "Incident Open", "Post-incident hardening may require refreshed operating procedure."),
+            ("Library of Controls", "Incident Open", "Post-incident hardening may require refreshed control library."),
+            ("Risk Assessment", "Incident Open", "Incident may require reassessment of inherent, controls and residual risk."),
+        ])
+
+    open_exceptions = get_exceptions(euc_id, open_only=True)
+    if not open_exceptions.empty or lifecycle == "Exception Active":
+        overlays.append(("Exception Record", "Exception Active", "Open exception requires documented exception record."))
+        if (euc.get("residual_risk") or "Medium") in {"High", "Very High"}:
+            overlays.append(("Approval Evidence", "Exception Active", "High/Very High residual exception requires appropriate approval evidence."))
+
+    changes = get_material_changes(euc_id)
+    open_changes = changes[~changes["status"].isin(["Closed", "Cancelled", "Withdrawn"])] if not changes.empty and "status" in changes.columns else changes
+    if not open_changes.empty or lifecycle in {"Under Change", "Awaiting Reassessment"}:
+        overlays.extend([
+            ("Change Evidence", "Under Change", "Material change requires change request/rationale and impact evidence."),
+            ("Versioning / Change Log Evidence", "Under Change", "Material change requires release/version traceability."),
+        ])
+        if _risk_score(baseline_risk) >= _risk_score("High"):
+            overlays.extend([
+                ("Testing Evidence", "Under Change", "High/Very High inherent material change requires testing evidence."),
+                ("UAT Evidence", "Under Change", "High/Very High inherent material change requires UAT or peer test evidence."),
+                ("Approval Evidence", "Under Change", "High/Very High inherent material change requires sign-off evidence."),
+            ])
+        overlays.append(("Risk Assessment", "Under Change", "Material change may require updated risk assessment."))
+
+    if lifecycle == "Industrialization Candidate":
+        overlays.append(("Industrialization Assessment Evidence", "Industrialization Candidate", "Industrialization candidate requires prioritization/assessment evidence."))
+
+    if lifecycle in {"Decommissioned", "Archived"} or (euc.get("overall_status") or "") in {"Decommissioned", "Archived"}:
+        overlays.extend([
+            ("Decommissioning Evidence", "Decommissioned", "Decommissioning requires final closure evidence."),
+            ("Archive Evidence", "Decommissioned", "Decommissioning requires archive/final released version evidence."),
+            ("Access Revocation Evidence", "Decommissioned", "Decommissioning requires evidence that legacy access was revoked."),
+        ])
+
+    return overlays
+
+
 def required_documents_for_euc(euc_id: int) -> pd.DataFrame:
     euc = get_euc(euc_id)
     if not euc:
         return pd.DataFrame()
-    risk = euc.get("residual_risk") or "Medium"
+
+    baseline_info = inherent_baseline_for_euc(euc_id)
+    baseline_risk = baseline_info["baseline_risk"]
+    reason_prefix = baseline_info["source"]
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    # Always include the policy default baseline first, so existing deployments
+    # are not dependent on whether the local required_artifact_rules table was
+    # seeded before or after the policy-corrected interpretation.
+    for doc_type in DEFAULT_REQUIRED_ARTIFACTS.get(baseline_risk, []):
+        _append_requirement(rows, seen, baseline_risk, "Active", doc_type, f"{reason_prefix}: {baseline_risk} baseline.")
+
+    # Also include administrator-approved rules for the inherent-risk baseline.
     rules = dataframe(
         """
         SELECT * FROM required_artifact_rules
         WHERE risk_level = ? AND mandatory_flag = 1 AND approval_status = 'Approved'
         ORDER BY required_document_type
         """,
-        (risk,),
+        (baseline_risk,),
     )
-    if rules.empty:
-        rows = [
+    for _, rule in rules.iterrows():
+        doc_type = rule["required_document_type"]
+        if doc_type in seen:
+            continue
+        rows.append(
             {
-                "risk_level": risk,
-                "lifecycle_stage": euc.get("lifecycle_status"),
-                "required_document_type": doc,
-                "control_area": None,
-                "cacrt_dimension": None,
-                "mandatory_flag": 1,
+                "risk_level": baseline_risk,
+                "risk_basis": "Overall Inherent Risk",
+                "lifecycle_stage": rule.get("lifecycle_stage") or "Active",
+                "required_document_type": doc_type,
+                "control_area": rule.get("control_area"),
+                "cacrt_dimension": rule.get("cacrt_dimension"),
+                "mandatory_flag": int(rule.get("mandatory_flag", 1)),
+                "requirement_reason": f"Approved required artifact rule for {baseline_risk} inherent baseline.",
             }
-            for doc in DEFAULT_REQUIRED_ARTIFACTS.get(risk, [])
-        ]
-        return pd.DataFrame(rows)
-    return rules
+        )
+        seen.add(doc_type)
+
+    for doc_type, lifecycle_stage, reason in _event_overlay_requirements(euc, baseline_risk):
+        _append_requirement(rows, seen, baseline_risk, lifecycle_stage, doc_type, reason)
+
+    return pd.DataFrame(rows).sort_values(["lifecycle_stage", "required_document_type"]).reset_index(drop=True)
+
 
 
 def artifact_checklist(euc_id: int) -> pd.DataFrame:
@@ -1584,8 +1773,12 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
             {
                 "document_type": doc_type,
                 "mandatory": bool(req.get("mandatory_flag", 1)),
+                "risk_level": req.get("risk_level"),
+                "risk_basis": req.get("risk_basis", "Overall Inherent Risk"),
+                "lifecycle_stage": req.get("lifecycle_stage"),
                 "control_area": req.get("control_area"),
                 "cacrt_dimension": req.get("cacrt_dimension"),
+                "requirement_reason": req.get("requirement_reason"),
                 "status": status,
                 "document_id": document_id,
                 "assessment_id": assessment_id,
@@ -1635,6 +1828,69 @@ def _lifecycle_for_documentation_status(current_lifecycle: str | None, documenta
     if documentation_status in {"Incomplete", "Submitted - Pending Review"} and current in pre_review_statuses:
         return "Awaiting Documentation"
     return None
+
+
+def create_residual_risk_governance_tasks(euc_id: int, username: str) -> int:
+    """Create remediation/escalation tasks driven by residual risk.
+
+    Residual risk should not lower the evidence baseline. It drives action: High
+    requires remediation planning; Very High is outside tolerance and requires
+    escalation/exception governance.
+    """
+    euc = get_euc(euc_id)
+    if not euc:
+        return 0
+    residual = euc.get("residual_risk") or "Medium"
+    created = 0
+    if residual not in {"High", "Very High"}:
+        return created
+
+    task_specs = []
+    if residual == "High":
+        task_specs.append(
+            {
+                "task_type": "Remediation",
+                "title": "Create remediation plan for High residual risk",
+                "description": "Residual risk is High. Policy requires a remediation plan with target dates and close management attention.",
+                "priority": "High",
+                "due_days": DEFAULT_DUE_DAYS["Remediation"],
+            }
+        )
+    if residual == "Very High":
+        task_specs.append(
+            {
+                "task_type": "Remediation",
+                "title": "Escalate Very High residual risk and raise exception if operation continues",
+                "description": "Residual risk is Very High/outside tolerance. Escalation and approved time-bound remediation or temporary exception are required.",
+                "priority": "Critical",
+                "due_days": 5,
+            }
+        )
+
+    for spec in task_specs:
+        existing = fetch_one(
+            """
+            SELECT task_id FROM tasks
+            WHERE euc_id = ? AND task_type = ? AND title = ? AND status IN ('Open','In Progress','Blocked','Closure Requested')
+            LIMIT 1
+            """,
+            (euc_id, spec["task_type"], spec["title"]),
+        )
+        if existing:
+            continue
+        create_task(
+            euc_id=euc_id,
+            task_type=spec["task_type"],
+            title=spec["title"],
+            description=spec["description"],
+            assigned_to=euc.get("owner"),
+            assigned_role=OWNER_ROLE,
+            due_date=add_days(spec["due_days"]),
+            priority=spec["priority"],
+            username=username,
+        )
+        created += 1
+    return created
 
 
 def evaluate_and_update_completeness(euc_id: int, username: str, create_missing_tasks: bool = False) -> str:
@@ -1691,6 +1947,9 @@ def evaluate_and_update_completeness(euc_id: int, username: str, create_missing_
             "UPDATE eucs SET documentation_completeness_status = ?, updated_at = ? WHERE euc_id = ?",
             (status, utc_now(), euc_id),
         )
+
+    if create_missing_tasks:
+        create_residual_risk_governance_tasks(euc_id, username)
 
     if create_missing_tasks and not checklist.empty:
         euc = get_euc(euc_id)
