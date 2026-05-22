@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from difflib import SequenceMatcher
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
@@ -2500,6 +2501,84 @@ def required_rules_table() -> pd.DataFrame:
 
 def due_date_rules_table() -> pd.DataFrame:
     return dataframe("SELECT * FROM due_date_rules ORDER BY task_type, risk_level")
+
+
+
+
+def operational_data_was_purged() -> bool:
+    """Return True when an admin has intentionally removed all EUC demo/operational data."""
+    row = fetch_one(
+        """
+        SELECT audit_id
+        FROM audit_trail
+        WHERE entity_type = 'EUC Operational Data' AND action = 'PURGE'
+        ORDER BY audit_id DESC
+        LIMIT 1
+        """
+    )
+    return bool(row)
+
+
+def delete_all_euc_operational_data(username: str) -> dict[str, Any]:
+    """Delete all EUC operational data while preserving users and configuration.
+
+    Preserved tables: user_profiles, raci_rules, reference_data,
+    required_artifact_rules, due_date_rules, and audit_trail. The audit trail is
+    preserved for governance, and this purge action is itself recorded.
+    """
+    tables_in_delete_order = [
+        "notification_outbox",
+        "tasks",
+        "findings",
+        "reviews",
+        "exceptions",
+        "incidents",
+        "material_changes",
+        "documents",
+        "risk_assessments",
+        "components",
+        "eucs",
+    ]
+    counts: dict[str, int] = {}
+    for table in tables_in_delete_order:
+        row = fetch_one(f"SELECT COUNT(*) AS n FROM {table}")
+        counts[table] = int(row["n"] if row else 0)
+
+    for table in tables_in_delete_order:
+        execute(f"DELETE FROM {table}")
+
+    # Reset local AUTOINCREMENT counters for the purged operational tables.
+    for table in tables_in_delete_order:
+        try:
+            execute("DELETE FROM sqlite_sequence WHERE name = ?", (table,))
+        except Exception:
+            pass
+
+    deleted_upload_items = 0
+    UPLOAD_PATH.mkdir(parents=True, exist_ok=True)
+    for child in list(UPLOAD_PATH.iterdir()):
+        if child.name.startswith("."):
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+        deleted_upload_items += 1
+
+    result = {
+        "deleted_rows": counts,
+        "deleted_upload_items": deleted_upload_items,
+        "preserved": [
+            "user_profiles",
+            "raci_rules",
+            "reference_data",
+            "required_artifact_rules",
+            "due_date_rules",
+            "audit_trail",
+        ],
+    }
+    insert_audit("EUC Operational Data", "ALL", "PURGE", username, counts, result)
+    return result
 
 
 def initialize_reference_data(username: str = "system") -> None:

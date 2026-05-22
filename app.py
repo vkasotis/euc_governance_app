@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import html
+import mimetypes
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -87,7 +90,7 @@ def navigation_for_role(role: str) -> list[str]:
 def bootstrap() -> None:
     init_db()
     svc.initialize_reference_data("system")
-    if table_count("eucs") == 0:
+    if table_count("eucs") == 0 and not svc.operational_data_was_purged():
         seed_database(force=False)
 
 
@@ -144,6 +147,52 @@ def safe_df(df: pd.DataFrame, height: int | str | None = None) -> None:
         kwargs["height"] = "auto"
     st.dataframe(df, **kwargs)
 
+
+
+
+def resolve_uploaded_file_path(file_path: Any) -> Path | None:
+    """Resolve a stored uploaded-document path to a local file path."""
+    if file_path is None or str(file_path).strip() == "" or str(file_path) == "nan":
+        return None
+    path = Path(str(file_path))
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parent / path
+    return path
+
+
+def uploaded_file_data_url(file_path: Any, file_name: Any = None) -> str | None:
+    """Return a browser-openable data URL for a locally stored uploaded file.
+
+    Streamlit does not serve arbitrary local files as static assets. For the MVP,
+    small uploaded evidence files are exposed through a data URL so reviewers and
+    EUC owners can open the exact file from the evidence table with one click.
+    """
+    path = resolve_uploaded_file_path(file_path)
+    if path is None or not path.exists() or not path.is_file():
+        return None
+    mime_type = mimetypes.guess_type(str(file_name or path.name))[0] or "application/octet-stream"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def render_document_open_links(docs: pd.DataFrame, title: str = "Open uploaded documentation") -> None:
+    """Render one-click open links for uploaded evidence records."""
+    if docs is None or docs.empty:
+        return
+    st.markdown(f"#### {title}")
+    for _, row in docs.iterrows():
+        file_name = row.get("file_name") or f"Document {row.get('document_id', '')}"
+        document_type = row.get("document_type") or "Evidence"
+        status = row.get("status") or ""
+        label = f"📎 Open {row.get('document_id', '')} — {document_type} — {file_name} ({status})"
+        url = uploaded_file_data_url(row.get("file_path"), file_name)
+        if url:
+            st.markdown(
+                f'<a href="{url}" target="_blank" rel="noopener noreferrer">{html.escape(label)}</a>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.warning(f"File is not available in local storage for document {row.get('document_id', '')}: {file_name}")
 
 def csv_download(df: pd.DataFrame, file_name: str, label: str = "Download CSV") -> None:
     if df is not None and not df.empty:
@@ -549,7 +598,9 @@ def page_detail() -> None:
     with tabs[3]:
         safe_df(svc.get_risk_assessments(euc["euc_id"]))
     with tabs[4]:
-        safe_df(svc.get_documents(euc["euc_id"]))
+        docs = svc.get_documents(euc["euc_id"])
+        safe_df(docs)
+        render_document_open_links(docs, "Open uploaded documentation")
     with tabs[5]:
         tasks = svc.get_tasks(open_only=False)
         if not tasks.empty:
@@ -780,6 +831,7 @@ def page_documents() -> None:
     st.subheader("Uploaded evidence")
     docs = svc.get_documents(euc["euc_id"])
     safe_df(docs, height=300)
+    render_document_open_links(docs, "Open uploaded documentation")
 
     col_upload, col_review = st.columns(2)
     uploadable_document_types = [doc for doc in DOCUMENT_TYPES if doc != "Risk Assessment"]
@@ -823,6 +875,7 @@ def page_documents() -> None:
             doc_map = {f"{row['document_id']} — {row['document_type']} — {row['status']}": int(row["document_id"]) for _, row in docs.iterrows()}
             chosen = st.selectbox("Document", list(doc_map.keys()))
             selected_doc = docs[docs["document_id"] == doc_map[chosen]].iloc[0].to_dict()
+            render_document_open_links(pd.DataFrame([selected_doc]), "Open selected evidence before review")
             with st.form("review_doc"):
                 status = st.selectbox("Review status", ["Accepted", "Rejected", "Expired", "Superseded", "Submitted"], index=option_index(["Accepted", "Rejected", "Expired", "Superseded", "Submitted"], selected_doc.get("status")))
                 deficiency = st.text_input("Deficiency tag", value=selected_doc.get("deficiency_tag") or "", placeholder="e.g., missing sign-off, expired evidence")
@@ -1307,10 +1360,24 @@ def page_admin() -> None:
         safe_df(svc.due_date_rules_table(), height=360)
         st.caption("Due-date rule editing is represented in the data model. The MVP uses default seeded rules for generated tasks.")
     with tabs[4]:
-        st.warning("The app auto-seeds an empty local database for demo readiness. Use the command-line seed script for controlled resets.")
+        st.warning("The app auto-seeds a new local database for demo readiness. After using the purge button below, auto-seeding is disabled until you explicitly run the seed loader again.")
         if st.button("Run seed data loader", type="secondary"):
             seed_database(force=False)
             st.success("Seed loader executed. Existing records were not overwritten.")
+
+        st.divider()
+        st.subheader("Delete all EUC operational data")
+        st.error(
+            "This deletes EUCs and related operational records: assets, risk assessments, uploaded evidence records, "
+            "tasks, reviews, findings, exceptions, incidents, material changes, and queued notifications. "
+            "User profiles, RACI rules, reference data, required artifact rules, due-date rules, and the audit trail are preserved."
+        )
+        confirm = st.text_input("Type DELETE EUC DATA to enable the purge button", key="purge_euc_data_confirm")
+        if st.button("Delete all EUC operational data", type="primary", disabled=confirm != "DELETE EUC DATA"):
+            result = svc.delete_all_euc_operational_data(username)
+            st.success("EUC operational data deleted. Users, configuration, and audit trail were preserved.")
+            st.write(result)
+            rerun()
 
 
 

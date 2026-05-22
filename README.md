@@ -276,3 +276,15 @@ All automated closures write an audit-trail entry with action `AUTO_CLOSE` and q
 ## Patch note - editable notification emails
 
 Seeded demo users are initialized with `ekassotis@eurobank.gr` so a fresh demo routes all notifications to the same mailbox by default. This is no longer hard-forced at runtime. Group IT Governance Administrators can edit user email addresses from `Admin Configuration` -> `User directory`, and new notification outbox records use the recipient email currently stored in the User Directory.
+
+## Patch 18 updates
+
+### Opening uploaded evidence
+
+Uploaded evidence is now shown with one-click **Open** links wherever uploaded documentation is displayed, including the EUC Detail View and Documents & Evidence Pack. Streamlit does not expose local files as static web assets, so the MVP generates browser-openable data links for the locally stored file. PDF, image, and text evidence generally opens in a new browser tab; Office files may download depending on browser support.
+
+### Deleting EUC operational data
+
+Group IT Governance Administrator users can use **Admin Configuration → Seed/reset demo → Delete all EUC operational data** to clear EUC-specific operational records while preserving users and configuration. The purge removes EUCs, assets, risk assessments, uploaded evidence records, tasks, reviews, findings, exceptions, incidents, material changes, queued notifications, and local upload files. User profiles, RACI rules, reference data, required artifact rules, due-date rules, and the audit trail are preserved. The purge action itself is recorded in the audit trail.
+
+After a purge, automatic demo reseeding is disabled until the seed loader is run manually from the same Admin page or by running `python seed_data.py`.
