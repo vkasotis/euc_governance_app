@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import html
 import mimetypes
+import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -160,39 +161,101 @@ def resolve_uploaded_file_path(file_path: Any) -> Path | None:
     return path
 
 
-def uploaded_file_data_url(file_path: Any, file_name: Any = None) -> str | None:
-    """Return a browser-openable data URL for a locally stored uploaded file.
+def _infer_office_extension(path: Path) -> str | None:
+    """Infer common Office extensions when a browser-supplied file name has no suffix."""
+    try:
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as archive:
+                names = set(archive.namelist())
+            if "xl/workbook.xml" in names:
+                return ".xlsm" if "xl/vbaProject.bin" in names else ".xlsx"
+            if "word/document.xml" in names:
+                return ".docx"
+            if "ppt/presentation.xml" in names:
+                return ".pptx"
+        header = path.read_bytes()[:16]
+        if header.startswith(b"%PDF"):
+            return ".pdf"
+        if header.startswith(b"\x89PNG"):
+            return ".png"
+        if header.startswith(b"\xff\xd8\xff"):
+            return ".jpg"
+    except Exception:
+        return None
+    return None
 
-    Streamlit does not serve arbitrary local files as static assets. For the MVP,
-    small uploaded evidence files are exposed through a data URL so reviewers and
-    EUC owners can open the exact file from the evidence table with one click.
+
+def document_download_name(file_name: Any, path: Path) -> str:
+    """Return a user-friendly download name with an extension where possible."""
+    raw_name = str(file_name or path.name or "uploaded_document").strip() or "uploaded_document"
+    if Path(raw_name).suffix:
+        return raw_name
+    inferred = _infer_office_extension(path)
+    return f"{raw_name}{inferred}" if inferred else raw_name
+
+
+def uploaded_file_data_url(file_path: Any, file_name: Any = None) -> str | None:
+    """Return a browser-preview data URL for previewable locally stored files.
+
+    Binary Office evidence should be downloaded with st.download_button instead.
+    Data URLs are kept only for browser-previewable evidence such as PDF, images,
+    text, and CSV. This avoids the blank/generic `download` files produced by
+    browser handling of binary data URLs.
     """
     path = resolve_uploaded_file_path(file_path)
     if path is None or not path.exists() or not path.is_file():
         return None
-    mime_type = mimetypes.guess_type(str(file_name or path.name))[0] or "application/octet-stream"
+    download_name = document_download_name(file_name, path)
+    mime_type = mimetypes.guess_type(download_name)[0] or "application/octet-stream"
+    previewable = (
+        mime_type == "application/pdf"
+        or mime_type.startswith("image/")
+        or mime_type.startswith("text/")
+        or mime_type in {"text/csv", "application/json", "application/xml"}
+    )
+    if not previewable:
+        return None
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
 
 
 def render_document_open_links(docs: pd.DataFrame, title: str = "Open uploaded documentation") -> None:
-    """Render one-click open links for uploaded evidence records."""
+    """Render reliable document access controls for uploaded evidence records."""
     if docs is None or docs.empty:
         return
     st.markdown(f"#### {title}")
     for _, row in docs.iterrows():
-        file_name = row.get("file_name") or f"Document {row.get('document_id', '')}"
+        document_id = row.get("document_id", "")
+        file_name = row.get("file_name") or f"Document {document_id}"
         document_type = row.get("document_type") or "Evidence"
         status = row.get("status") or ""
-        label = f"📎 Open {row.get('document_id', '')} — {document_type} — {file_name} ({status})"
-        url = uploaded_file_data_url(row.get("file_path"), file_name)
-        if url:
-            st.markdown(
-                f'<a href="{url}" target="_blank" rel="noopener noreferrer">{html.escape(label)}</a>',
-                unsafe_allow_html=True,
+        path = resolve_uploaded_file_path(row.get("file_path"))
+        if path is None or not path.exists() or not path.is_file():
+            st.warning(f"File is not available in local storage for document {document_id}: {file_name}")
+            continue
+
+        download_name = document_download_name(file_name, path)
+        mime_type = mimetypes.guess_type(download_name)[0] or "application/octet-stream"
+        label = f"Document {document_id} — {document_type} — {download_name} ({status})"
+        st.caption(label)
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            st.download_button(
+                "Download",
+                data=path.read_bytes(),
+                file_name=download_name,
+                mime=mime_type,
+                key=f"download_doc_{document_id}_{abs(hash(str(title))) % 100000}",
             )
-        else:
-            st.warning(f"File is not available in local storage for document {row.get('document_id', '')}: {file_name}")
+        with c2:
+            preview_url = uploaded_file_data_url(path, download_name)
+            if preview_url:
+                st.markdown(
+                    f'<a href="{preview_url}" target="_blank" rel="noopener noreferrer">Open preview in browser</a>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption("Office/binary files download to your computer; open them with the relevant desktop application.")
 
 def csv_download(df: pd.DataFrame, file_name: str, label: str = "Download CSV") -> None:
     if df is not None and not df.empty:

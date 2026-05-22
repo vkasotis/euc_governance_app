@@ -288,3 +288,7 @@ Uploaded evidence is now shown with one-click **Open** links wherever uploaded d
 Group IT Governance Administrator users can use **Admin Configuration → Seed/reset demo → Delete all EUC operational data** to clear EUC-specific operational records while preserving users and configuration. The purge removes EUCs, assets, risk assessments, uploaded evidence records, tasks, reviews, findings, exceptions, incidents, material changes, queued notifications, and local upload files. User profiles, RACI rules, reference data, required artifact rules, due-date rules, and the audit trail are preserved. The purge action itself is recorded in the audit trail.
 
 After a purge, automatic demo reseeding is disabled until the seed loader is run manually from the same Admin page or by running `python seed_data.py`.
+
+## Document access note
+
+Uploaded evidence is stored locally under `uploads/`. The UI uses Streamlit download buttons for Office and other binary evidence so that the browser receives the original bytes with an appropriate file name/extension. Browser previews are shown only for previewable formats such as PDF, images, text, CSV, JSON, and XML.
