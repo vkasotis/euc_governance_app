@@ -39,6 +39,7 @@ CONTRIBUTOR_ROLE = "EUC Owner Delegate / Contributor"
 IOF_ROLE = "IOF"
 DATA_GOVERNANCE_ROLE = "Data Governance"
 GRM_STRATEGY_ROLE = "GRM Strategy & Oversight / Projects (Group Finance)"
+DEFAULT_EMAIL_ADDRESS = "ekassotis@eurobank.gr"
 
 RACI_PARTY_TO_PROFILE_ROLE = {
     "EUC Owner": OWNER_ROLE,
@@ -81,8 +82,17 @@ DEFAULT_DUE_DAYS = {
 
 
 def _default_email(username: str) -> str:
-    local = re.sub(r"[^a-z0-9._-]", ".", username.lower()).strip(".") or "demo.user"
-    return f"{local}@eurobank.gr"
+    """Return the default seeded demo mailbox.
+
+    This value is only used to initialize demo users. Administrators can later
+    change each user's email address in Admin Configuration.
+    """
+    return DEFAULT_EMAIL_ADDRESS
+
+
+def _clean_email(value: str | None) -> str | None:
+    value = (value or "").strip()
+    return value or None
 
 
 def username_options_for_role(role: str) -> list[str]:
@@ -128,6 +138,35 @@ def seed_user_profiles(username: str = "system") -> None:
             )
 
 
+def sync_all_email_addresses(performed_by: str = "system") -> None:
+    """One-off admin utility: update every stored user and queued notification email.
+
+    This function is intentionally *not* called during normal startup. It is kept
+    for controlled demo resets only. User emails remain editable from the UI.
+    """
+    rows = fetch_all("SELECT user_id, username, email FROM user_profiles")
+    now = utc_now()
+    for row in rows:
+        if (row.get("email") or "") == DEFAULT_EMAIL_ADDRESS:
+            continue
+        execute(
+            "UPDATE user_profiles SET email = ?, updated_by = ?, updated_at = ? WHERE user_id = ?",
+            (DEFAULT_EMAIL_ADDRESS, performed_by, now, row["user_id"]),
+        )
+        insert_audit(
+            "User Profile",
+            row["user_id"],
+            "EMAIL_SYNC",
+            performed_by,
+            {"username": row.get("username"), "email": row.get("email")},
+            {"username": row.get("username"), "email": DEFAULT_EMAIL_ADDRESS},
+        )
+    execute(
+        "UPDATE notification_outbox SET recipient_email = ? WHERE recipient_email IS NOT NULL AND recipient_email <> '' AND recipient_email <> ?",
+        (DEFAULT_EMAIL_ADDRESS, DEFAULT_EMAIL_ADDRESS),
+    )
+
+
 def user_profiles_table(active_only: bool = False) -> pd.DataFrame:
     sql = """
         SELECT user_id, username, full_name, email, role, active_flag, maker_checker_comments, updated_at
@@ -160,7 +199,7 @@ def upsert_user_profile(payload: dict[str, Any], performed_by: str) -> int:
         (
             payload["username"],
             payload.get("full_name"),
-            payload.get("email"),
+            _clean_email(payload.get("email")) or DEFAULT_EMAIL_ADDRESS,
             payload["role"],
             int(bool(payload.get("active_flag", True))),
             payload.get("maker_checker_comments"),
@@ -170,7 +209,7 @@ def upsert_user_profile(payload: dict[str, Any], performed_by: str) -> int:
             now,
         ),
     )
-    insert_audit("User Profile", user_id, "CREATE", performed_by, None, payload)
+    insert_audit("User Profile", user_id, "CREATE", performed_by, None, {**payload, "email": _clean_email(payload.get("email")) or DEFAULT_EMAIL_ADDRESS})
     queue_raci_notifications(
         "USER_PROFILE_UPDATED",
         "User Profile",
@@ -196,7 +235,7 @@ def update_user_profile(user_id: int, payload: dict[str, Any], performed_by: str
         (
             payload["username"],
             payload.get("full_name"),
-            payload.get("email"),
+            _clean_email(payload.get("email")) or DEFAULT_EMAIL_ADDRESS,
             payload["role"],
             int(bool(payload.get("active_flag", True))),
             payload.get("maker_checker_comments"),
@@ -205,7 +244,7 @@ def update_user_profile(user_id: int, payload: dict[str, Any], performed_by: str
             user_id,
         ),
     )
-    insert_audit("User Profile", user_id, "UPDATE", performed_by, old, payload)
+    insert_audit("User Profile", user_id, "UPDATE", performed_by, old, {**payload, "email": _clean_email(payload.get("email")) or DEFAULT_EMAIL_ADDRESS})
     queue_raci_notifications(
         "USER_PROFILE_UPDATED",
         "User Profile",
@@ -400,6 +439,7 @@ def _insert_notification(
     raci_responsibility: str | None,
     created_by: str,
 ) -> int:
+    recipient_email = _clean_email(recipient_email)
     status = "Pending" if recipient_email else "No Email"
     notification_id = execute(
         """
@@ -627,13 +667,14 @@ def update_notification_status(notification_id: int, status: str, username: str,
 def send_pending_notifications(limit: int, username: str) -> dict[str, int]:
     """Send pending outbox entries through SMTP when configured.
 
-    Required environment variables: SMTP_HOST and SMTP_FROM. Optional variables:
-    SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_USE_TLS.
+    Required environment variable: SMTP_HOST. Optional variables:
+    SMTP_PORT, SMTP_FROM, SMTP_USER, SMTP_PASSWORD, SMTP_USE_TLS.
+    SMTP_FROM defaults to DEFAULT_EMAIL_ADDRESS.
     """
     host = os.getenv("SMTP_HOST")
-    sender = os.getenv("SMTP_FROM")
-    if not host or not sender:
-        raise ValueError("SMTP_HOST and SMTP_FROM environment variables are required to send emails. Pending notifications remain in the outbox.")
+    sender = os.getenv("SMTP_FROM", DEFAULT_EMAIL_ADDRESS)
+    if not host:
+        raise ValueError("SMTP_HOST environment variable is required to send emails. Pending notifications remain in the outbox.")
     port = int(os.getenv("SMTP_PORT", "587"))
     use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
     smtp_user = os.getenv("SMTP_USER")

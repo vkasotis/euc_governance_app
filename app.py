@@ -1206,7 +1206,7 @@ def page_admin() -> None:
                     st.error("Value is required.")
     with tabs[1]:
         st.subheader("User directory")
-        st.caption("Select a user row in the table to load it into the edit form. These users feed the MVP login list and task assignee email resolution.")
+        st.caption("Select a user row in the table to load it into the edit form. Seeded demo users start with ekassotis@eurobank.gr, but the email address remains editable for future routing changes.")
         users_df = svc.user_profiles_table(active_only=False)
         selected_user = None
         if users_df.empty:
@@ -1238,7 +1238,7 @@ def page_admin() -> None:
                 c1, c2 = st.columns(2)
                 edit_username = c1.text_input("Username *", value=selected_user.get("username") or "")
                 full_name = c2.text_input("Full name", value=selected_user.get("full_name") or "")
-                email = c1.text_input("Email", value=selected_user.get("email") or "")
+                email = c1.text_input("Email", value=selected_user.get("email") or svc.DEFAULT_EMAIL_ADDRESS)
                 edit_role = c2.selectbox("Role *", DIRECTORY_ROLES, index=option_index(DIRECTORY_ROLES, selected_user.get("role")))
                 active = c1.checkbox("Active", value=bool(selected_user.get("active_flag")))
                 comments = st.text_area("Maker-checker / admin comments", value=selected_user.get("maker_checker_comments") or "")
@@ -1252,7 +1252,7 @@ def page_admin() -> None:
                             {
                                 "username": edit_username.strip(),
                                 "full_name": full_name.strip(),
-                                "email": email.strip(),
+                                "email": email.strip() or svc.DEFAULT_EMAIL_ADDRESS,
                                 "role": edit_role,
                                 "active_flag": active,
                                 "maker_checker_comments": comments,
@@ -1267,7 +1267,7 @@ def page_admin() -> None:
                 c1, c2 = st.columns(2)
                 new_username = c1.text_input("New username *")
                 new_full_name = c2.text_input("New full name")
-                new_email = c1.text_input("New email")
+                new_email = c1.text_input("New email", value=svc.DEFAULT_EMAIL_ADDRESS)
                 new_role = c2.selectbox("New role *", DIRECTORY_ROLES, key="new_user_role")
                 new_active = c1.checkbox("New user active", value=True)
                 new_comments = st.text_area("New user comments")
@@ -1279,7 +1279,7 @@ def page_admin() -> None:
                             {
                                 "username": new_username.strip(),
                                 "full_name": new_full_name.strip(),
-                                "email": new_email.strip(),
+                                "email": new_email.strip() or svc.DEFAULT_EMAIL_ADDRESS,
                                 "role": new_role,
                                 "active_flag": new_active,
                                 "maker_checker_comments": new_comments,
@@ -1416,11 +1416,11 @@ def page_notifications() -> None:
         st.write("The MVP queues email actions even when no SMTP server is configured. To send emails, configure these environment variables in Streamlit Cloud or the local shell:")
         st.code("""SMTP_HOST=smtp.example.internal
 SMTP_PORT=587
-SMTP_FROM=euc-governance@eurobank.gr
+SMTP_FROM=ekassotis@eurobank.gr
 SMTP_USER=<optional>
 SMTP_PASSWORD=<optional>
 SMTP_USE_TLS=true""", language="bash")
-        st.info("If SMTP_HOST or SMTP_FROM is missing, the Send button leaves notifications in Pending status and shows a configuration warning.")
+        st.info("If SMTP_HOST is missing, the Send button leaves notifications in Pending status and shows a configuration warning. SMTP_FROM defaults to ekassotis@eurobank.gr, while recipient addresses come from the editable User Directory.")
 
 def page_audit() -> None:
     st.title("Audit Trail")

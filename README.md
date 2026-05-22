@@ -252,13 +252,13 @@ The MVP queues notifications even when no mail server is configured. To enable a
 ```bash
 SMTP_HOST=smtp.example.internal
 SMTP_PORT=587
-SMTP_FROM=euc-governance@eurobank.gr
+SMTP_FROM=ekassotis@eurobank.gr
 SMTP_USER=<optional>
 SMTP_PASSWORD=<optional>
 SMTP_USE_TLS=true
 ```
 
-When SMTP is not configured, notifications remain in `Pending` status and can be exported or manually statused from the `Email Notifications` page.
+When SMTP_HOST is not configured, notifications remain in `Pending` status and can be exported or manually statused from the `Email Notifications` page.
 
 ## Automated task closure
 
@@ -272,3 +272,7 @@ The MVP now auto-closes workflow tasks when the underlying user action is comple
 - Closing a finding closes the matching remediation task.
 
 All automated closures write an audit-trail entry with action `AUTO_CLOSE` and queue a task-update notification where the notification outbox is enabled.
+
+## Patch note - editable notification emails
+
+Seeded demo users are initialized with `ekassotis@eurobank.gr` so a fresh demo routes all notifications to the same mailbox by default. This is no longer hard-forced at runtime. Group IT Governance Administrators can edit user email addresses from `Admin Configuration` -> `User directory`, and new notification outbox records use the recipient email currently stored in the User Directory.
