@@ -861,6 +861,8 @@ def page_documents() -> None:
         return
 
     st.subheader("Required artifact checklist")
+    # Synchronize documentation completeness/lifecycle before showing the checklist.
+    svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
     checklist = svc.artifact_checklist(euc["euc_id"])
     safe_df(checklist, height=260)
 
@@ -957,7 +959,12 @@ def page_checklist() -> None:
     euc = euc_selector()
     if not euc:
         return
-    st.markdown(f"Residual risk: **{badge(euc['residual_risk'])}** · Lifecycle: **{badge(euc['lifecycle_status'])}**")
+    # The checklist is calculated, so sync the stored EUC documentation and lifecycle
+    # status before displaying it. This prevents stale values such as
+    # "Awaiting Documentation" after all mandatory artifacts have been accepted.
+    svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
+    euc = svc.get_euc(euc["euc_id"]) or euc
+    st.markdown(f"Residual risk: **{badge(euc['residual_risk'])}** · Lifecycle: **{badge(euc['lifecycle_status'])}** · Documentation: **{badge(euc.get('documentation_completeness_status'))}**")
     checklist = svc.artifact_checklist(euc["euc_id"])
     safe_df(checklist, height=350)
     c1, c2 = st.columns(2)

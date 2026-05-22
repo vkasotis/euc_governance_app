@@ -1596,6 +1596,47 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _lifecycle_for_documentation_status(current_lifecycle: str | None, documentation_status: str) -> str | None:
+    """Return an automatic lifecycle transition driven by documentation completeness.
+
+    The artifact checklist is the source of truth for documentation completeness.
+    When all mandatory artifacts are accepted or internally satisfied, the EUC
+    should leave "Awaiting Documentation" and move to "Review Ready".
+
+    The function intentionally avoids overriding statuses that indicate an
+    active governance state such as remediation, incident, exception, change,
+    industrialization, decommissioning, or archive.
+    """
+    current = current_lifecycle or "Registered"
+    protected_statuses = {
+        "Active",
+        "Under Remediation",
+        "Exception Active",
+        "Incident Open",
+        "Under Change",
+        "Awaiting Reassessment",
+        "Industrialization Candidate",
+        "Decommissioned",
+        "Archived",
+    }
+    if current in protected_statuses:
+        return None
+
+    pre_review_statuses = {
+        "Draft",
+        "Submitted",
+        "Registered",
+        "Risk Assessment In Progress",
+        "Awaiting Documentation",
+        "Review Ready",
+    }
+    if documentation_status == "Complete" and current in pre_review_statuses:
+        return "Review Ready"
+    if documentation_status in {"Incomplete", "Submitted - Pending Review"} and current in pre_review_statuses:
+        return "Awaiting Documentation"
+    return None
+
+
 def evaluate_and_update_completeness(euc_id: int, username: str, create_missing_tasks: bool = False) -> str:
     checklist = artifact_checklist(euc_id)
     if checklist.empty:
@@ -1606,10 +1647,51 @@ def evaluate_and_update_completeness(euc_id: int, username: str, create_missing_
         status = "Incomplete"
     else:
         status = "Submitted - Pending Review"
-    execute(
-        "UPDATE eucs SET documentation_completeness_status = ?, updated_at = ? WHERE euc_id = ?",
-        (status, utc_now(), euc_id),
-    )
+
+    old_euc = get_euc(euc_id)
+    if old_euc:
+        new_lifecycle = _lifecycle_for_documentation_status(old_euc.get("lifecycle_status"), status)
+        update_payload: dict[str, Any] = {
+            "documentation_completeness_status": status,
+            "updated_at": utc_now(),
+        }
+        if new_lifecycle and new_lifecycle != old_euc.get("lifecycle_status"):
+            update_payload["lifecycle_status"] = new_lifecycle
+            update_payload["overall_status"] = new_lifecycle
+            execute(
+                """
+                UPDATE eucs
+                SET documentation_completeness_status = ?, lifecycle_status = ?, overall_status = ?, updated_at = ?
+                WHERE euc_id = ?
+                """,
+                (status, new_lifecycle, new_lifecycle, update_payload["updated_at"], euc_id),
+            )
+        else:
+            execute(
+                "UPDATE eucs SET documentation_completeness_status = ?, updated_at = ? WHERE euc_id = ?",
+                (status, update_payload["updated_at"], euc_id),
+            )
+        if (old_euc.get("documentation_completeness_status") != status) or (new_lifecycle and new_lifecycle != old_euc.get("lifecycle_status")):
+            insert_audit(
+                "EUC",
+                euc_id,
+                "COMPLETENESS_SYNC",
+                username,
+                {
+                    "documentation_completeness_status": old_euc.get("documentation_completeness_status"),
+                    "lifecycle_status": old_euc.get("lifecycle_status"),
+                },
+                {
+                    "documentation_completeness_status": status,
+                    "lifecycle_status": new_lifecycle or old_euc.get("lifecycle_status"),
+                },
+            )
+    else:
+        execute(
+            "UPDATE eucs SET documentation_completeness_status = ?, updated_at = ? WHERE euc_id = ?",
+            (status, utc_now(), euc_id),
+        )
+
     if create_missing_tasks and not checklist.empty:
         euc = get_euc(euc_id)
         for _, row in checklist[checklist["status"].isin(["Missing", "Rejected", "Expired"])].iterrows():
