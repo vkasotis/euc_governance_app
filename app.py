@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import html
-import mimetypes
-import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -23,7 +19,6 @@ from schema import (
     CACRT_DIMENSIONS,
     CHANGE_TYPES,
     CONTROL_AREAS,
-    DIRECTORY_ROLES,
     DOCUMENT_STATUSES,
     DOCUMENT_TYPES,
     FINDING_SEVERITIES,
@@ -63,36 +58,16 @@ NAVIGATION = [
     "Industrialization & Decommissioning",
     "Reports & KPIs",
     "Admin Configuration",
-    "Email Notifications",
     "Audit Trail",
 ]
-
-REPORTS_ACCESS_ROLES = {svc.GCC_ROLE, svc.ADMIN_ROLE, svc.DVU_ROLE}
-NOTIFICATION_ACCESS_ROLES = {svc.GCC_ROLE, svc.ADMIN_ROLE, svc.DVU_ROLE}
-AUDIT_ACCESS_ROLES = {svc.GCC_ROLE}
-
-
-def can_access_page(page: str, role: str) -> bool:
-    """Central page-access guard for role-sensitive navigation items."""
-    if page == "Reports & KPIs":
-        return role in REPORTS_ACCESS_ROLES
-    if page == "Email Notifications":
-        return role in NOTIFICATION_ACCESS_ROLES
-    if page == "Audit Trail":
-        return role in AUDIT_ACCESS_ROLES
-    return True
-
-
-def navigation_for_role(role: str) -> list[str]:
-    """Return only the pages the current role is allowed to open."""
-    return [page for page in NAVIGATION if can_access_page(page, role)]
 
 
 def bootstrap() -> None:
     init_db()
     svc.initialize_reference_data("system")
-    if table_count("eucs") == 0 and not svc.operational_data_was_purged():
-        seed_database(force=False)
+    # Do not auto-seed operational EUC data on startup.
+    # Demo data can be loaded explicitly from Admin Configuration. This prevents deleted EUC data
+    # from reappearing after a source-code redeploy while the SQLite database is empty.
 
 
 def rerun() -> None:
@@ -131,131 +106,16 @@ def badge(value: Any) -> str:
 
 
 def safe_df(df: pd.DataFrame, height: int | str | None = None) -> None:
-    """Render a dataframe without passing invalid height values to Streamlit.
-
-    Streamlit 1.40+ raises StreamlitInvalidHeightError when height=None or
-    non-positive values are passed explicitly. Omitting the argument is safe and
-    lets Streamlit calculate the default table height.
-    """
     if df is None or df.empty:
         st.info("No records found for the current filters.")
         return
-
-    kwargs: dict[str, Any] = {"use_container_width": True, "hide_index": True}
+    kwargs = {"use_container_width": True, "hide_index": True}
     if isinstance(height, int) and height > 0:
         kwargs["height"] = height
-    elif isinstance(height, str) and height == "auto":
+    elif height == "auto":
         kwargs["height"] = "auto"
     st.dataframe(df, **kwargs)
 
-
-
-
-def resolve_uploaded_file_path(file_path: Any) -> Path | None:
-    """Resolve a stored uploaded-document path to a local file path."""
-    if file_path is None or str(file_path).strip() == "" or str(file_path) == "nan":
-        return None
-    path = Path(str(file_path))
-    if not path.is_absolute():
-        path = Path(__file__).resolve().parent / path
-    return path
-
-
-def _infer_office_extension(path: Path) -> str | None:
-    """Infer common Office extensions when a browser-supplied file name has no suffix."""
-    try:
-        if zipfile.is_zipfile(path):
-            with zipfile.ZipFile(path) as archive:
-                names = set(archive.namelist())
-            if "xl/workbook.xml" in names:
-                return ".xlsm" if "xl/vbaProject.bin" in names else ".xlsx"
-            if "word/document.xml" in names:
-                return ".docx"
-            if "ppt/presentation.xml" in names:
-                return ".pptx"
-        header = path.read_bytes()[:16]
-        if header.startswith(b"%PDF"):
-            return ".pdf"
-        if header.startswith(b"\x89PNG"):
-            return ".png"
-        if header.startswith(b"\xff\xd8\xff"):
-            return ".jpg"
-    except Exception:
-        return None
-    return None
-
-
-def document_download_name(file_name: Any, path: Path) -> str:
-    """Return a user-friendly download name with an extension where possible."""
-    raw_name = str(file_name or path.name or "uploaded_document").strip() or "uploaded_document"
-    if Path(raw_name).suffix:
-        return raw_name
-    inferred = _infer_office_extension(path)
-    return f"{raw_name}{inferred}" if inferred else raw_name
-
-
-def uploaded_file_data_url(file_path: Any, file_name: Any = None) -> str | None:
-    """Return a browser-preview data URL for previewable locally stored files.
-
-    Binary Office evidence should be downloaded with st.download_button instead.
-    Data URLs are kept only for browser-previewable evidence such as PDF, images,
-    text, and CSV. This avoids the blank/generic `download` files produced by
-    browser handling of binary data URLs.
-    """
-    path = resolve_uploaded_file_path(file_path)
-    if path is None or not path.exists() or not path.is_file():
-        return None
-    download_name = document_download_name(file_name, path)
-    mime_type = mimetypes.guess_type(download_name)[0] or "application/octet-stream"
-    previewable = (
-        mime_type == "application/pdf"
-        or mime_type.startswith("image/")
-        or mime_type.startswith("text/")
-        or mime_type in {"text/csv", "application/json", "application/xml"}
-    )
-    if not previewable:
-        return None
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
-
-
-def render_document_open_links(docs: pd.DataFrame, title: str = "Open uploaded documentation") -> None:
-    """Render reliable document access controls for uploaded evidence records."""
-    if docs is None or docs.empty:
-        return
-    st.markdown(f"#### {title}")
-    for _, row in docs.iterrows():
-        document_id = row.get("document_id", "")
-        file_name = row.get("file_name") or f"Document {document_id}"
-        document_type = row.get("document_type") or "Evidence"
-        status = row.get("status") or ""
-        path = resolve_uploaded_file_path(row.get("file_path"))
-        if path is None or not path.exists() or not path.is_file():
-            st.warning(f"File is not available in local storage for document {document_id}: {file_name}")
-            continue
-
-        download_name = document_download_name(file_name, path)
-        mime_type = mimetypes.guess_type(download_name)[0] or "application/octet-stream"
-        label = f"Document {document_id} — {document_type} — {download_name} ({status})"
-        st.caption(label)
-        c1, c2 = st.columns([1, 3])
-        with c1:
-            st.download_button(
-                "Download",
-                data=path.read_bytes(),
-                file_name=download_name,
-                mime=mime_type,
-                key=f"download_doc_{document_id}_{abs(hash(str(title))) % 100000}",
-            )
-        with c2:
-            preview_url = uploaded_file_data_url(path, download_name)
-            if preview_url:
-                st.markdown(
-                    f'<a href="{preview_url}" target="_blank" rel="noopener noreferrer">Open preview in browser</a>',
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.caption("Office/binary files download to your computer; open them with the relevant desktop application.")
 
 def csv_download(df: pd.DataFrame, file_name: str, label: str = "Download CSV") -> None:
     if df is not None and not df.empty:
@@ -266,106 +126,6 @@ def option_index(options: list[str], value: str | None, default: int = 0) -> int
     if value in options:
         return options.index(value)
     return default
-
-def display_value(value: Any) -> str:
-    """Return a business-friendly display value for table/card views."""
-    if value is None:
-        return "—"
-    if isinstance(value, float) and pd.isna(value):
-        return "—"
-    text = str(value)
-    if text.strip() == "" or text.lower() in {"nan", "none", "null"}:
-        return "—"
-    return text
-
-
-def labelize(field_name: str) -> str:
-    return field_name.replace("_", " ").strip().title()
-
-
-def record_table(record: dict[str, Any], fields: list[str | tuple[str, str]], *, title: str | None = None) -> None:
-    """Render a record as a normal field/value table instead of raw JSON."""
-    rows: list[dict[str, str]] = []
-    for item in fields:
-        if isinstance(item, tuple):
-            label, key = item
-        else:
-            label, key = labelize(item), item
-        rows.append({"Field": label, "Value": display_value(record.get(key))})
-    if title:
-        st.markdown(f"#### {title}")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-
-def assessment_review_card(assessment: dict[str, Any]) -> None:
-    """Render a completed risk assessment in workbook-style business sections."""
-    st.markdown(
-        f"#### Assessment {display_value(assessment.get('assessment_id'))} "
-        f"— Version {display_value(assessment.get('version'))}"
-    )
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Assessment date", display_value(assessment.get("assessment_date")))
-    c2.metric("Assessed by", display_value(assessment.get("assessed_by")))
-    c3.metric("Overall inherent risk", display_value(assessment.get("overall_inherent_risk") or assessment.get("inherent_risk")))
-    c4.metric("Overall residual risk", display_value(assessment.get("overall_residual_risk") or assessment.get("residual_risk")))
-
-    st.markdown("##### BCBS 239 materiality")
-    record_table(
-        assessment,
-        [
-            ("Could materially affect BCBS 239 output", "materiality_q1"),
-            ("Key control point", "materiality_q2"),
-            ("Single point of failure", "materiality_q3"),
-            ("Materially supports BCBS 239", "materially_supports_bcbs239"),
-            ("Assessment type", "trigger_type"),
-        ],
-    )
-
-    st.markdown("##### Risk dimensions")
-    dimensions = pd.DataFrame(
-        [
-            {
-                "Dimension": "Integrity / Accuracy",
-                "Owner inherent": display_value(assessment.get("owner_integrity_inherent")),
-                "Effective inherent": display_value(assessment.get("effective_integrity_inherent") or assessment.get("inherent_risk")),
-                "Control effectiveness": display_value(assessment.get("integrity_control_effectiveness")),
-                "Residual risk": display_value(assessment.get("integrity_residual_risk") or assessment.get("residual_risk")),
-            },
-            {
-                "Dimension": "Timeliness / Availability",
-                "Owner inherent": display_value(assessment.get("owner_timeliness_inherent")),
-                "Effective inherent": display_value(assessment.get("effective_timeliness_inherent") or assessment.get("inherent_risk")),
-                "Control effectiveness": display_value(assessment.get("timeliness_control_effectiveness")),
-                "Residual risk": display_value(assessment.get("timeliness_residual_risk") or assessment.get("residual_risk")),
-            },
-        ]
-    )
-    st.dataframe(dimensions, use_container_width=True, hide_index=True)
-
-    st.markdown("##### Baseline controls")
-    controls = pd.DataFrame(
-        [
-            {"Control": "Registration & risk assessment", "Status": display_value(assessment.get("control_registration_risk_assessment"))},
-            {"Control": "Privileged Access", "Status": display_value(assessment.get("control_privileged_access"))},
-            {"Control": "Versioning & change log", "Status": display_value(assessment.get("control_versioning_change_log"))},
-            {"Control": "Checks & reconciliations", "Status": display_value(assessment.get("control_checks_reconciliations"))},
-            {"Control": "EUC Library of Controls / CACRT", "Status": display_value(assessment.get("control_library_controls_cacrt"))},
-            {"Control": "Operating Procedure", "Status": display_value(assessment.get("control_operating_procedure"))},
-            {"Control": "Evidence & sign-off", "Status": display_value(assessment.get("control_evidence_signoff"))},
-            {"Control": "Resilience", "Status": display_value(assessment.get("control_resilience"))},
-        ]
-    )
-    st.dataframe(controls, use_container_width=True, hide_index=True)
-
-    st.markdown("##### Required action and rationale")
-    record_table(
-        assessment,
-        [
-            ("Required action", "required_action"),
-            ("Rationale / comments", "rationale"),
-            ("Created at", "created_at"),
-        ],
-    )
 
 
 def selected_euc_id() -> int | None:
@@ -420,12 +180,7 @@ def show_sidebar() -> str:
     st.sidebar.divider()
     st.sidebar.write(f"**Logged in as:** {username}")
     st.sidebar.write(f"**Role:** {role}")
-
-    allowed_pages = navigation_for_role(role)
-    if not allowed_pages:
-        allowed_pages = ["Home / Dashboard"]
-    page = st.sidebar.radio("Navigation", allowed_pages, index=0)
-
+    page = st.sidebar.radio("Navigation", NAVIGATION, index=0)
     st.sidebar.divider()
     st.sidebar.caption(f"SQLite: `{DATABASE_FILE.name}` · Uploads: `/uploads`")
     return page
@@ -442,11 +197,11 @@ def metric_grid(metrics: dict[str, int]) -> None:
 def page_dashboard() -> None:
     st.title("Home / Dashboard")
     username, role = current_user()
-    metrics = svc.dashboard_metrics(role, username)
+    metrics = svc.dashboard_metrics()
     metric_grid(metrics)
 
-    st.subheader("My dashboard overview")
-    data = svc.chart_data(role, username)
+    st.subheader("Portfolio overview")
+    data = svc.chart_data()
     c1, c2 = st.columns(2)
     if not data["by_lifecycle"].empty:
         c1.plotly_chart(px.bar(data["by_lifecycle"], x="lifecycle_status", y="count", title="EUCs by lifecycle status"), use_container_width=True)
@@ -459,8 +214,8 @@ def page_dashboard() -> None:
         c4.plotly_chart(px.bar(data["tasks_by_status"], x="status", y="count", title="Tasks by status"), use_container_width=True)
 
     st.subheader("My task queue")
-    tasks = svc.get_dashboard_tasks(role, username, open_only=True)
-    safe_df(tasks[[c for c in ["task_id", "reference_id", "euc_name", "task_type", "title", "assigned_to", "assigned_email", "due_date", "priority", "status", "overdue"] if c in tasks.columns]], height=260)
+    tasks = svc.get_tasks(role, username, open_only=True)
+    safe_df(tasks[[c for c in ["task_id", "reference_id", "euc_name", "task_type", "title", "due_date", "priority", "status", "overdue"] if c in tasks.columns]], height=260)
 
 
 def page_inventory() -> None:
@@ -590,21 +345,7 @@ def page_detail() -> None:
     tabs = st.tabs(["Overview", "Mapping", "Components", "Risk History", "Evidence", "Tasks", "Reviews", "Audit"])
     with tabs[0]:
         st.write(euc.get("description") or "No description recorded.")
-        record_table(
-            euc,
-            [
-                "purpose",
-                "business_unit",
-                "technology_type",
-                "storage_location",
-                "frequency",
-                "schedule",
-                "cut_off",
-                ("SPOF indicator", "spof_indicator"),
-                "next_review_date",
-            ],
-            title="EUC summary",
-        )
+        st.json({k: euc.get(k) for k in ["purpose", "business_unit", "technology_type", "storage_location", "frequency", "schedule", "cut_off", "spof_indicator", "next_review_date"]})
         if svc.can_edit_euc(role, username, euc):
             with st.expander("Edit EUC summary and lifecycle"):
                 with st.form("edit_euc"):
@@ -629,20 +370,7 @@ def page_detail() -> None:
                         except ValueError as exc:
                             st.error(str(exc))
     with tabs[1]:
-        record_table(
-            euc,
-            [
-                "business_context",
-                ("BCBS 239 output mapping", "bcbs239_output_mapping"),
-                ("CDE linkage", "cde_linkage"),
-                "inputs",
-                "outputs",
-                "recipients",
-                "dependencies",
-                ("Not Applicable justification", "mapping_na_justification"),
-            ],
-            title="Mapping information",
-        )
+        st.json({k: euc.get(k) for k in ["business_context", "bcbs239_output_mapping", "cde_linkage", "inputs", "outputs", "recipients", "dependencies", "mapping_na_justification"]})
         if svc.can_edit_euc(role, username, euc):
             with st.expander("Edit mapping fields"):
                 with st.form("edit_mapping"):
@@ -661,9 +389,7 @@ def page_detail() -> None:
     with tabs[3]:
         safe_df(svc.get_risk_assessments(euc["euc_id"]))
     with tabs[4]:
-        docs = svc.get_documents(euc["euc_id"])
-        safe_df(docs)
-        render_document_open_links(docs, "Open uploaded documentation")
+        safe_df(svc.get_documents(euc["euc_id"]))
     with tabs[5]:
         tasks = svc.get_tasks(open_only=False)
         if not tasks.empty:
@@ -681,87 +407,27 @@ def page_components() -> None:
     euc = euc_selector()
     if not euc:
         return
-
-    components = svc.get_components(euc["euc_id"])
-    st.subheader(f"EUC Asset Inventory for {euc['reference_id']}")
-    safe_df(components, height=350)
-
-    can_edit = svc.can_edit_euc(role, username, euc) or role in {svc.GCC_ROLE, svc.ADMIN_ROLE}
-    if not can_edit:
-        st.info("You can view components but cannot add or edit components for this EUC in the current role.")
+    safe_df(svc.get_components(euc["euc_id"]), height=350)
+    if not svc.can_edit_euc(role, username, euc):
+        st.info("You can view components but cannot add components for this EUC in the current role.")
         return
-
-    tabs = st.tabs(["Edit selected component", "Add component"])
-    with tabs[0]:
-        if components.empty:
-            st.info("No components exist for this EUC yet.")
-        else:
-            component_map = {
-                f"{row['component_id']} — {row['component_name']} — {row['component_type']}": int(row["component_id"])
-                for _, row in components.iterrows()
-            }
-            chosen = st.selectbox("Select component to edit", list(component_map.keys()))
-            component = svc.get_component(component_map[chosen])
-            if component:
-                with st.form("edit_component"):
-                    c1, c2 = st.columns(2)
-                    component_name = c1.text_input("Component / asset name *", value=component.get("component_name") or "")
-                    component_type = c2.selectbox("Component type *", TECHNOLOGY_TYPES, index=option_index(TECHNOLOGY_TYPES, component.get("component_type")))
-                    technology = c1.text_input("Technology", value=component.get("technology") or "")
-                    storage_location = c2.text_input("Storage location", value=component.get("storage_location") or "")
-                    criticality = c1.selectbox("Criticality", ["Low", "Medium", "High", "Critical"], index=option_index(["Low", "Medium", "High", "Critical"], component.get("criticality")))
-                    owner_value = c2.text_input("Owner", value=component.get("owner") or "")
-                    description = st.text_area("Description", value=component.get("description") or "")
-                    if st.form_submit_button("Save component changes", type="primary"):
-                        if not component_name.strip():
-                            st.error("Component name is required.")
-                        else:
-                            svc.update_component(
-                                int(component["component_id"]),
-                                {
-                                    "component_name": component_name.strip(),
-                                    "component_type": component_type,
-                                    "technology": technology,
-                                    "storage_location": storage_location,
-                                    "criticality": criticality,
-                                    "owner": owner_value,
-                                    "description": description,
-                                },
-                                username,
-                            )
-                            st.success("Component updated.")
-                            rerun()
-
-    with tabs[1]:
-        with st.form("add_component"):
-            st.subheader("Add component")
-            c1, c2 = st.columns(2)
-            component_name = c1.text_input("Component name *")
-            component_type = c2.selectbox("Component type *", TECHNOLOGY_TYPES)
-            technology = c1.text_input("Technology", value=euc.get("technology_type") or "")
-            storage_location = c2.text_input("Storage location", value=euc.get("storage_location") or "")
-            criticality = c1.selectbox("Criticality", ["Low", "Medium", "High", "Critical"])
-            owner = c2.text_input("Owner", value=euc.get("owner") or username)
-            description = st.text_area("Description")
-            if st.form_submit_button("Add component"):
-                if not component_name.strip():
-                    st.error("Component name is required.")
-                else:
-                    svc.create_component(
-                        {
-                            "euc_id": euc["euc_id"],
-                            "component_name": component_name.strip(),
-                            "component_type": component_type,
-                            "technology": technology,
-                            "storage_location": storage_location,
-                            "criticality": criticality,
-                            "owner": owner,
-                            "description": description,
-                        },
-                        username,
-                    )
-                    st.success("Component added.")
-                    rerun()
+    with st.form("add_component"):
+        st.subheader("Add component")
+        c1, c2 = st.columns(2)
+        component_name = c1.text_input("Component name *")
+        component_type = c2.selectbox("Component type *", TECHNOLOGY_TYPES)
+        technology = c1.text_input("Technology", value=euc.get("technology_type") or "")
+        storage_location = c2.text_input("Storage location", value=euc.get("storage_location") or "")
+        criticality = c1.selectbox("Criticality", ["Low", "Medium", "High", "Critical"])
+        owner = c2.text_input("Owner", value=euc.get("owner") or username)
+        description = st.text_area("Description")
+        if st.form_submit_button("Add component"):
+            if not component_name:
+                st.error("Component name is required.")
+            else:
+                svc.create_component({"euc_id": euc["euc_id"], "component_name": component_name, "component_type": component_type, "technology": technology, "storage_location": storage_location, "criticality": criticality, "owner": owner, "description": description}, username)
+                st.success("Component added.")
+                rerun()
 
 
 def page_risk_assessment() -> None:
@@ -770,86 +436,37 @@ def page_risk_assessment() -> None:
     euc = euc_selector()
     if not euc:
         return
-
-    st.caption("Excel-aligned model: BCBS 239 materiality forces effective inherent risk to Very High; residual risk follows the workbook control-effectiveness matrix.")
+    st.info("Owner-completed risk assessments are submitted for review. They become Accepted only after GCC/Data Validation/Administrator review.")
     assessments = svc.get_risk_assessments(euc["euc_id"])
     safe_df(assessments, height=260)
 
-    if not assessments.empty:
-        with st.expander("Open completed assessment for review", expanded=False):
-            assessment_map = {
-                f"Assessment {row['assessment_id']} — version {row['version']} — residual {row.get('overall_residual_risk') or row.get('residual_risk')}": int(row["assessment_id"])
-                for _, row in assessments.iterrows()
-            }
-            chosen = st.selectbox("Completed assessment", list(assessment_map.keys()), key="risk_review_select")
-            selected = assessments[assessments["assessment_id"] == assessment_map[chosen]].iloc[0].to_dict()
-            assessment_review_card(selected)
-            st.info("Completed assessments are retained as history. To amend a completed assessment, submit a new version below.")
+    if svc.can_review(role) and not assessments.empty and require_write_access():
+        with st.expander("Review submitted risk assessment", expanded=False):
+            assessment_map = {f"#{row['assessment_id']} — version {row['version']} — {row.get('status', 'Submitted')}": int(row["assessment_id"]) for _, row in assessments.iterrows()}
+            chosen_assessment = st.selectbox("Assessment to review", list(assessment_map.keys()))
+            with st.form("review_risk_assessment"):
+                status = st.selectbox("Review status", ["Submitted", "Accepted", "Rejected"])
+                comments = st.text_area("Review comments")
+                if st.form_submit_button("Save risk assessment review"):
+                    svc.review_risk_assessment(assessment_map[chosen_assessment], status, comments, username)
+                    st.success("Risk assessment review status updated.")
+                    rerun()
 
     if not svc.can_edit_euc(role, username, euc) and role not in {svc.ADMIN_ROLE, svc.GCC_ROLE}:
         st.warning("Only the EUC owner/delegate or governance roles can record assessments.")
         return
-
-    st.subheader("Submit new risk assessment version")
-    with st.form("risk_assessment_excel"):
-        st.markdown("#### BCBS 239 materiality assessment")
-        m1 = st.selectbox(
-            "Failure/error could make a BCBS 239 in-scope output materially inaccurate, incomplete, delayed, or unavailable",
-            ["No", "Yes"],
-        )
-        m2 = st.selectbox(
-            "EUC is a key control point that can trigger correction, rejection, restatement, escalation, or delayed issuance",
-            ["No", "Yes"],
-        )
-        m3 = st.selectbox(
-            "EUC is a single point of failure in a critical reporting/risk process",
-            ["No", "Yes"],
-        )
-
-        st.markdown("#### Owner-entered inherent risk")
-        c1, c2, c3 = st.columns(3)
-        owner_integrity = c1.selectbox("Owner Integrity / Accuracy inherent risk", svc.OWNER_INHERENT_LEVELS, index=1)
-        owner_timeliness = c2.selectbox("Owner Timeliness / Availability inherent risk", svc.OWNER_INHERENT_LEVELS, index=1)
-        trigger = c3.selectbox("Assessment type", ["Periodic", "Material Change", "Incident-triggered", "Initial Registration", "Manual / Ad hoc"])
-
-        st.markdown("#### Baseline controls")
-        a, b = st.columns(2)
-        ctrl_1 = a.selectbox("1. Registration & risk assessment", svc.CONTROL_STATUS_CORE, index=1)
-        ctrl_2 = b.selectbox("2. Privileged Access", svc.CONTROL_STATUS_CORE, index=1)
-        ctrl_3 = a.selectbox("3. Versioning & change log", svc.CONTROL_STATUS_CORE, index=1)
-        ctrl_4 = b.selectbox("4. Checks & reconciliations", svc.CONTROL_STATUS_CORE, index=1)
-        ctrl_5 = a.selectbox("5. EUC Library of Controls / CACRT", svc.CONTROL_STATUS_WITH_NA, index=1)
-        ctrl_6 = b.selectbox("6. Operating Procedure", svc.CONTROL_STATUS_CORE, index=1)
-        ctrl_7 = a.selectbox("7. Evidence & sign-off", svc.CONTROL_STATUS_WITH_NA, index=1)
-        ctrl_8 = b.selectbox("8. Resilience", svc.CONTROL_STATUS_CORE, index=1)
-
-        rationale = st.text_area("Rationale / comments")
-        submitted = st.form_submit_button("Submit assessment", type="primary")
-        if submitted:
-            payload = {
-                "euc_id": euc["euc_id"],
-                "assessment_date": date.today().isoformat(),
-                "assessed_by": username,
-                "materiality_q1": m1,
-                "materiality_q2": m2,
-                "materiality_q3": m3,
-                "owner_integrity_inherent": owner_integrity,
-                "owner_timeliness_inherent": owner_timeliness,
-                "control_registration_risk_assessment": ctrl_1,
-                "control_privileged_access": ctrl_2,
-                "control_versioning_change_log": ctrl_3,
-                "control_checks_reconciliations": ctrl_4,
-                "control_library_controls_cacrt": ctrl_5,
-                "control_operating_procedure": ctrl_6,
-                "control_evidence_signoff": ctrl_7,
-                "control_resilience": ctrl_8,
-                "trigger_type": trigger,
-                "rationale": rationale,
-            }
-            calculated = svc.calculate_excel_risk_assessment(payload)
-            assessment_id = svc.create_risk_assessment(payload, username)
-            st.success(f"Assessment {assessment_id} submitted. Overall inherent risk: {calculated['overall_inherent_risk']}; overall residual risk: {calculated['overall_residual_risk']}.")
-            st.info(calculated["required_action"])
+    with st.form("risk_assessment"):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        integrity = c1.slider("Integrity / accuracy", 1, 5, 3)
+        timeliness = c2.slider("Timeliness / availability", 1, 5, 3)
+        complexity = c3.slider("Complexity", 1, 5, 3)
+        criticality = c4.slider("Business criticality", 1, 5, 3)
+        controls = c5.slider("Control effectiveness", 1, 5, 3, help="Higher means weaker controls / greater residual concern in this MVP scoring convention.")
+        trigger = st.selectbox("Trigger type", ["Onboarding", "Material change", "Incident", "Periodic review", "Manual trigger"])
+        rationale = st.text_area("Rationale")
+        if st.form_submit_button("Submit assessment"):
+            assessment_id = svc.create_risk_assessment({"euc_id": euc["euc_id"], "assessment_date": date.today().isoformat(), "assessed_by": username, "integrity_accuracy_score": integrity, "timeliness_availability_score": timeliness, "complexity_score": complexity, "business_criticality_score": criticality, "control_effectiveness_score": controls, "trigger_type": trigger, "rationale": rationale, "status": "Submitted"}, username)
+            st.success(f"Assessment {assessment_id} submitted for review. It is not Accepted until reviewed by GCC/Data Validation/Administrator.")
             rerun()
 
 
@@ -859,82 +476,40 @@ def page_documents() -> None:
     euc = euc_selector()
     if not euc:
         return
+    docs = svc.get_documents(euc["euc_id"])
 
     st.subheader("Required artifact checklist")
-    baseline = svc.inherent_baseline_for_euc(euc["euc_id"])
-    st.caption(
-        f"Required artifacts are driven by the policy baseline: **{baseline['baseline_risk']} Overall Inherent Risk** "
-        f"({baseline['source']}). Residual risk drives remediation, escalation and exceptions; it does not reduce the baseline evidence pack."
-    )
-    # Synchronize documentation completeness/lifecycle before showing the checklist.
-    svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
+    st.caption("Use the 'what_to_upload' column to understand the evidence expected for each requirement.")
     checklist = svc.artifact_checklist(euc["euc_id"])
-    safe_df(checklist, height=260)
-
-    st.subheader("Completed risk assessments used as internal evidence")
-    assessments = svc.get_risk_assessments(euc["euc_id"])
-    if assessments.empty:
-        st.warning("No completed risk assessment exists for this EUC. Complete the Risk Assessment module; do not upload a separate risk assessment file.")
-    else:
-        assessment_cols = [
-            col for col in [
-                "assessment_id", "version", "assessment_date", "assessed_by", "materially_supports_bcbs239",
-                "owner_integrity_inherent", "owner_timeliness_inherent", "effective_integrity_inherent",
-                "effective_timeliness_inherent", "overall_inherent_risk", "overall_residual_risk", "required_action",
-            ] if col in assessments.columns
-        ]
-        safe_df(assessments[assessment_cols], height=220)
-        assessment_map = {
-            f"Open assessment {row['assessment_id']} — version {row['version']}": int(row["assessment_id"])
-            for _, row in assessments.iterrows()
-        }
-        chosen_assessment = st.selectbox("Risk assessment review link", list(assessment_map.keys()), key="evidence_assessment_link")
-        if st.button("Open selected assessment for review"):
-            st.session_state["evidence_open_assessment_id"] = assessment_map[chosen_assessment]
-        open_id = st.session_state.get("evidence_open_assessment_id")
-        if open_id:
-            selected = assessments[assessments["assessment_id"] == int(open_id)]
-            if not selected.empty:
-                with st.expander(f"Assessment {open_id} review", expanded=True):
-                    assessment_review_card(selected.iloc[0].to_dict())
+    safe_df(checklist, height=280)
 
     st.subheader("Uploaded evidence")
-    docs = svc.get_documents(euc["euc_id"])
-    safe_df(docs, height=300)
-    render_document_open_links(docs, "Open uploaded documentation")
+    safe_df(docs, height=320)
 
     col_upload, col_review = st.columns(2)
-    uploadable_document_types = [doc for doc in DOCUMENT_TYPES if doc != "Risk Assessment"]
     with col_upload:
         st.subheader("Upload evidence")
         if svc.can_upload_evidence(role, username, euc) and require_write_access():
             uploaded = st.file_uploader("Upload document / evidence")
             with st.form("doc_metadata"):
+                uploadable_document_types = [d for d in DOCUMENT_TYPES if d != "Risk Assessment"]
                 document_type = st.selectbox("Document type", uploadable_document_types)
+                st.info(svc.artifact_upload_guidance(document_type))
+                requirement = st.text_input("Requirement", value=f"Mandatory {document_type}")
+                control_area = st.selectbox("Control area", CONTROL_AREAS)
+                cacrt = st.selectbox("CACRT dimension", CACRT_DIMENSIONS)
+                risk_app = st.selectbox("Risk applicability", ["All", "Low", "Medium", "High", "Very High"])
+                lifecycle_stage = st.selectbox("Lifecycle stage", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, euc.get("lifecycle_status")))
+                version = st.text_input("Version", value="1.0")
+                status = st.selectbox("Initial status", ["Submitted", "Pending"])
                 comments = st.text_area("Comments")
                 if st.form_submit_button("Save uploaded evidence"):
                     if uploaded is None:
                         st.error("Select a file before saving metadata.")
                     else:
                         file_name, file_path = svc.save_document_file(euc["euc_id"], uploaded.name, uploaded.getvalue())
-                        doc_id = svc.create_document_record(
-                            {
-                                "euc_id": euc["euc_id"],
-                                "file_name": file_name,
-                                "file_path": file_path,
-                                "document_type": document_type,
-                                "requirement": None,
-                                "control_area": None,
-                                "cacrt_dimension": None,
-                                "risk_applicability": None,
-                                "lifecycle_stage": None,
-                                "version": None,
-                                "status": "Submitted",
-                                "comments": comments,
-                            },
-                            username,
-                        )
-                        st.success(f"Evidence uploaded as document {doc_id}. Status set to Submitted.")
+                        doc_id = svc.create_document_record({"euc_id": euc["euc_id"], "file_name": file_name, "file_path": file_path, "document_type": document_type, "requirement": requirement, "control_area": control_area, "cacrt_dimension": cacrt, "risk_applicability": risk_app, "lifecycle_stage": lifecycle_stage, "version": version, "status": status, "comments": comments}, username)
+                        st.success(f"Evidence uploaded as document {doc_id}.")
                         rerun()
         else:
             st.info("Upload is disabled for the current role/EUC relationship.")
@@ -944,12 +519,10 @@ def page_documents() -> None:
         if svc.can_review(role) and require_write_access() and not docs.empty:
             doc_map = {f"{row['document_id']} — {row['document_type']} — {row['status']}": int(row["document_id"]) for _, row in docs.iterrows()}
             chosen = st.selectbox("Document", list(doc_map.keys()))
-            selected_doc = docs[docs["document_id"] == doc_map[chosen]].iloc[0].to_dict()
-            render_document_open_links(pd.DataFrame([selected_doc]), "Open selected evidence before review")
             with st.form("review_doc"):
-                status = st.selectbox("Review status", ["Accepted", "Rejected", "Expired", "Superseded", "Submitted"], index=option_index(["Accepted", "Rejected", "Expired", "Superseded", "Submitted"], selected_doc.get("status")))
-                deficiency = st.text_input("Deficiency tag", value=selected_doc.get("deficiency_tag") or "", placeholder="e.g., missing sign-off, expired evidence")
-                comments = st.text_area("Review comments", value=selected_doc.get("comments") or "")
+                status = st.selectbox("Review status", ["Accepted", "Rejected", "Expired", "Superseded", "Submitted"])
+                deficiency = st.text_input("Deficiency tag", placeholder="e.g., missing sign-off, expired evidence")
+                comments = st.text_area("Review comments")
                 if st.form_submit_button("Record review"):
                     svc.review_document(doc_map[chosen], status, comments, deficiency, username)
                     st.success("Document review recorded and checklist recalculated.")
@@ -964,19 +537,7 @@ def page_checklist() -> None:
     euc = euc_selector()
     if not euc:
         return
-    # The checklist is calculated, so sync the stored EUC documentation and lifecycle
-    # status before displaying it. This prevents stale values such as
-    # "Awaiting Documentation" after all mandatory artifacts have been accepted.
-    svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
-    euc = svc.get_euc(euc["euc_id"]) or euc
-    baseline = svc.inherent_baseline_for_euc(euc["euc_id"])
-    st.markdown(
-        f"Inherent baseline: **{badge(baseline['baseline_risk'])}** · "
-        f"Residual risk: **{badge(euc['residual_risk'])}** · "
-        f"Lifecycle: **{badge(euc['lifecycle_status'])}** · "
-        f"Documentation: **{badge(euc.get('documentation_completeness_status'))}**"
-    )
-    st.caption("Checklist baseline follows Overall Inherent Risk / BCBS 239 materiality. Residual risk is used for remediation, escalation and exception handling.")
+    st.markdown(f"Overall inherent risk baseline: **{badge(euc['inherent_risk'])}** · Residual risk: **{badge(euc['residual_risk'])}** · Lifecycle: **{badge(euc['lifecycle_status'])}**")
     checklist = svc.artifact_checklist(euc["euc_id"])
     safe_df(checklist, height=350)
     c1, c2 = st.columns(2)
@@ -994,63 +555,20 @@ def page_checklist() -> None:
 def page_tasks() -> None:
     st.title("Tasks & Remediation")
     username, role = current_user()
-    st.caption(
-        "This page is scoped to the logged-in user. It shows tasks assigned to you, "
-        "tasks assigned to your role queue, and, for EUC owners/contributors, tasks linked to your own or delegated EUCs."
-    )
     open_only = st.toggle("Open tasks only", value=True)
-    scoped_tasks = svc.get_tasks(role, username, open_only=open_only)
-
-    if scoped_tasks.empty:
-        st.info("No tasks are assigned to your user, role queue, or accessible EUCs for the current filter.")
-        return
-
-    euc_options = ["All my accessible tasks"]
-    euc_lookup: dict[str, int] = {}
-    euc_cols = [c for c in ["euc_id", "reference_id", "euc_name"] if c in scoped_tasks.columns]
-    if set(["euc_id", "reference_id", "euc_name"]).issubset(euc_cols):
-        euc_rows = scoped_tasks[["euc_id", "reference_id", "euc_name"]].drop_duplicates().sort_values(["reference_id", "euc_name"])
-        for _, row in euc_rows.iterrows():
-            label = f"{row['reference_id']} — {row['euc_name']}"
-            euc_options.append(label)
-            euc_lookup[label] = int(row["euc_id"])
-
-    chosen_euc = st.selectbox("Filter by EUC", euc_options)
-    tasks = scoped_tasks.copy()
-    if chosen_euc != "All my accessible tasks":
-        tasks = tasks[tasks["euc_id"] == euc_lookup[chosen_euc]]
-
-    display_cols = [
-        "task_id", "reference_id", "euc_name", "task_type", "title", "assigned_to",
-        "assigned_full_name", "assigned_email", "assigned_role", "due_date", "priority", "status", "overdue"
-    ]
-    safe_df(tasks[[c for c in display_cols if c in tasks.columns]], height=420)
-
+    tasks = svc.get_tasks(role, username, open_only=open_only)
+    safe_df(tasks, height=420)
     if tasks.empty or svc.is_read_only(role):
         return
-
-    st.subheader("Update selected task")
+    st.subheader("Update task")
     task_map = {f"{row['task_id']} — {row['title']}": int(row["task_id"]) for _, row in tasks.iterrows()}
     chosen = st.selectbox("Task", list(task_map.keys()))
-    selected_task = tasks[tasks["task_id"] == task_map[chosen]].iloc[0].to_dict()
     with st.form("update_task"):
-        c1, c2, c3 = st.columns(3)
-        status = c1.selectbox("Status", TASK_STATUSES, index=option_index(TASK_STATUSES, selected_task.get("status")))
-        priority = c2.selectbox("Priority", PRIORITIES, index=option_index(PRIORITIES, selected_task.get("priority")))
-        due_default = pd.to_datetime(selected_task.get("due_date"), errors="coerce")
-        due_date = c3.date_input("Due date", value=(due_default.date() if pd.notna(due_default) else date.today()))
-        evidence_id = st.number_input(
-            "Closure evidence document ID",
-            min_value=0,
-            value=int(selected_task.get("closure_evidence_document_id") or 0),
-            step=1,
-        )
-        reason = st.text_area("Closure reason / response", value=selected_task.get("closure_reason") or "")
+        status = st.selectbox("Status", TASK_STATUSES)
+        evidence_id = st.number_input("Closure evidence document ID", min_value=0, value=0, step=1)
+        reason = st.text_area("Closure reason / response")
         if st.form_submit_button("Update task"):
-            # The table is already scoped to the current user/role. Only selected
-            # task IDs from that scoped table can be submitted through this form.
             svc.update_task(task_map[chosen], status, reason, int(evidence_id) or None, username)
-            svc.update_task_admin_fields(task_map[chosen], due_date.isoformat(), priority, username)
             st.success("Task updated.")
             rerun()
 
@@ -1296,10 +814,6 @@ def page_lifecycle() -> None:
 
 def page_reports() -> None:
     st.title("Reports & KPIs")
-    username, role = current_user()
-    if role not in REPORTS_ACCESS_ROLES:
-        st.warning("Reports & KPIs are restricted to GCC, Data Validation Unit, and Group IT Governance Administrator users.")
-        return
     df = svc.all_eucs()
     c1, c2, c3, c4 = st.columns(4)
     owner = c1.selectbox("Owner", ["All"] + sorted(df["owner"].dropna().unique().tolist()) if not df.empty else ["All"])
@@ -1323,12 +837,11 @@ def page_admin() -> None:
         st.warning("Admin Configuration is restricted to Group IT Governance Administrator.")
         return
     refs = svc.load_reference_data()
-    tabs = st.tabs(["Reference data", "User directory", "Required artifact rules", "Due-date rules", "Seed/reset demo"])
+    tabs = st.tabs(["Reference data", "Required artifact rules", "Due-date rules", "Seed/reset demo"])
     with tabs[0]:
         category = st.selectbox("Category", ["document_type", "lifecycle_status", "risk_level", "control_area", "cacrt_dimension"])
         st.write("Current values")
-        values_df = pd.DataFrame({"Value": refs.get(category, [])})
-        safe_df(values_df)
+        st.write(refs.get(category, []))
         with st.form("add_ref"):
             value = st.text_input("New reference value")
             comments = st.text_area("Maker-checker comments")
@@ -1340,94 +853,10 @@ def page_admin() -> None:
                 else:
                     st.error("Value is required.")
     with tabs[1]:
-        st.subheader("User directory")
-        st.caption("Select a user row in the table to load it into the edit form. Seeded demo users start with ekassotis@eurobank.gr, but the email address remains editable for future routing changes.")
-        users_df = svc.user_profiles_table(active_only=False)
-        selected_user = None
-        if users_df.empty:
-            st.info("No users have been configured yet.")
-        else:
-            try:
-                event = st.dataframe(
-                    users_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=360,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key="user_directory_table",
-                )
-                selected_rows = list(getattr(event.selection, "rows", [])) if hasattr(event, "selection") else []
-            except TypeError:
-                st.dataframe(users_df, use_container_width=True, hide_index=True, height=360)
-                selected_rows = []
-            labels = {f"{row['username']} — {row['role']}": int(row["user_id"]) for _, row in users_df.iterrows()}
-            fallback_label = st.selectbox("Selected user", list(labels.keys()), key="user_directory_selectbox")
-            fallback_id = labels[fallback_label]
-            selected_id = int(users_df.iloc[selected_rows[0]]["user_id"]) if selected_rows else fallback_id
-            selected_user = svc.get_user_profile(selected_id)
-
-        if selected_user:
-            st.markdown("#### Edit selected user")
-            with st.form("edit_user_profile"):
-                c1, c2 = st.columns(2)
-                edit_username = c1.text_input("Username *", value=selected_user.get("username") or "")
-                full_name = c2.text_input("Full name", value=selected_user.get("full_name") or "")
-                email = c1.text_input("Email", value=selected_user.get("email") or svc.DEFAULT_EMAIL_ADDRESS)
-                edit_role = c2.selectbox("Role *", DIRECTORY_ROLES, index=option_index(DIRECTORY_ROLES, selected_user.get("role")))
-                active = c1.checkbox("Active", value=bool(selected_user.get("active_flag")))
-                comments = st.text_area("Maker-checker / admin comments", value=selected_user.get("maker_checker_comments") or "")
-                save_user = st.form_submit_button("Save selected user", type="primary")
-                if save_user:
-                    if not edit_username.strip():
-                        st.error("Username is required.")
-                    else:
-                        svc.update_user_profile(
-                            int(selected_user["user_id"]),
-                            {
-                                "username": edit_username.strip(),
-                                "full_name": full_name.strip(),
-                                "email": email.strip() or svc.DEFAULT_EMAIL_ADDRESS,
-                                "role": edit_role,
-                                "active_flag": active,
-                                "maker_checker_comments": comments,
-                            },
-                            username,
-                        )
-                        st.success("User profile updated.")
-                        rerun()
-
-        with st.expander("Add new user"):
-            with st.form("add_user_profile"):
-                c1, c2 = st.columns(2)
-                new_username = c1.text_input("New username *")
-                new_full_name = c2.text_input("New full name")
-                new_email = c1.text_input("New email", value=svc.DEFAULT_EMAIL_ADDRESS)
-                new_role = c2.selectbox("New role *", DIRECTORY_ROLES, key="new_user_role")
-                new_active = c1.checkbox("New user active", value=True)
-                new_comments = st.text_area("New user comments")
-                if st.form_submit_button("Create user"):
-                    if not new_username.strip():
-                        st.error("Username is required.")
-                    else:
-                        svc.upsert_user_profile(
-                            {
-                                "username": new_username.strip(),
-                                "full_name": new_full_name.strip(),
-                                "email": new_email.strip() or svc.DEFAULT_EMAIL_ADDRESS,
-                                "role": new_role,
-                                "active_flag": new_active,
-                                "maker_checker_comments": new_comments,
-                            },
-                            username,
-                        )
-                        st.success("User profile created.")
-                        rerun()
-    with tabs[2]:
         safe_df(svc.required_rules_table(), height=320)
         with st.form("add_rule"):
             c1, c2, c3 = st.columns(3)
-            risk = c1.selectbox("Overall inherent risk baseline", RISK_LEVELS)
+            risk = c1.selectbox("Risk level", RISK_LEVELS)
             lifecycle = c2.selectbox("Lifecycle stage", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, "Active"))
             doc_type = c3.selectbox("Required document type", DOCUMENT_TYPES)
             control = c1.selectbox("Control area", CONTROL_AREAS)
@@ -1438,145 +867,28 @@ def page_admin() -> None:
                 svc.upsert_required_rule({"risk_level": risk, "lifecycle_stage": lifecycle, "required_document_type": doc_type, "control_area": control, "cacrt_dimension": cacrt, "mandatory_flag": mandatory, "maker_checker_comments": comments}, username)
                 st.success("Rule created.")
                 rerun()
-    with tabs[3]:
+    with tabs[2]:
         safe_df(svc.due_date_rules_table(), height=360)
         st.caption("Due-date rule editing is represented in the data model. The MVP uses default seeded rules for generated tasks.")
-    with tabs[4]:
-        st.warning("The app auto-seeds a new local database for demo readiness. After using the purge button below, auto-seeding is disabled until you explicitly run the seed loader again.")
+    with tabs[3]:
+        st.warning("Demo data is loaded only on explicit request. This prevents deleted EUC data from reappearing after a code redeploy.")
         if st.button("Run seed data loader", type="secondary"):
             seed_database(force=False)
+            svc.set_app_setting("auto_seed_disabled", "0", username)
             st.success("Seed loader executed. Existing records were not overwritten.")
-
         st.divider()
         st.subheader("Delete all EUC operational data")
-        st.error(
-            "This deletes EUCs and related operational records: assets, risk assessments, uploaded evidence records, "
-            "tasks, reviews, findings, exceptions, incidents, material changes, and queued notifications. "
-            "User profiles, RACI rules, reference data, required artifact rules, due-date rules, and the audit trail are preserved."
-        )
-        confirm = st.text_input("Type DELETE EUC DATA to enable the purge button", key="purge_euc_data_confirm")
-        if st.button("Delete all EUC operational data", type="primary", disabled=confirm != "DELETE EUC DATA"):
-            result = svc.delete_all_euc_operational_data(username)
-            st.success("EUC operational data deleted. Users, configuration, and audit trail were preserved.")
-            st.write(result)
+        st.caption("Preserves reference data, required artifact rules, due-date rules, and audit trail.")
+        confirmation = st.text_input("Type DELETE EUC DATA to confirm", key="purge_confirm")
+        if st.button("Delete all EUC operational data", type="primary", disabled=confirmation != "DELETE EUC DATA"):
+            deleted = svc.purge_euc_operational_data(username)
+            st.success(f"Deleted EUC operational data and disabled auto-seeding. Records deleted: {deleted}")
             rerun()
 
-
-
-def page_notifications() -> None:
-    st.title("Email Notifications")
-    username, role = current_user()
-    if role not in NOTIFICATION_ACCESS_ROLES:
-        st.warning("Email Notifications are restricted to GCC, Data Validation Unit, and Group IT Governance Administrator users.")
-        return
-    st.caption("Email actions are queued from the RACI matrix. SMTP sending is optional and controlled by environment variables.")
-
-    tabs = st.tabs(["Notification outbox", "RACI email rules", "SMTP configuration"])
-    with tabs[0]:
-        c1, c2, c3 = st.columns(3)
-        statuses = ["All"] + svc.notification_statuses()
-        events = ["All"] + svc.notification_event_types()
-        status_filter = c1.selectbox("Status", statuses)
-        event_filter = c2.selectbox("Event type", events)
-        recipient_filter = c3.text_input("Recipient contains")
-        outbox = svc.notification_outbox_table({"status": status_filter, "event_type": event_filter, "recipient": recipient_filter})
-        display_cols = [
-            "notification_id", "status", "event_type", "activity_decision", "reference_id", "recipient_username",
-            "recipient_email", "recipient_role", "raci_party", "raci_responsibility", "created_at", "sent_at", "error_message",
-        ]
-        safe_df(outbox[[c for c in display_cols if c in outbox.columns]] if not outbox.empty else outbox, height=460)
-        csv_download(outbox, "notification_outbox.csv")
-
-        st.markdown("#### Send / manage selected notifications")
-        c4, c5 = st.columns(2)
-        limit = c4.number_input("Maximum pending emails to send", min_value=1, max_value=500, value=25, step=5)
-        if c5.button("Send pending via SMTP", type="primary"):
-            try:
-                result = svc.send_pending_notifications(int(limit), username)
-                st.success(f"Attempted {result['attempted']} notification(s). Sent: {result['sent']}; failed: {result['failed']}.")
-                rerun()
-            except Exception as exc:
-                st.error(str(exc))
-
-        if not outbox.empty:
-            labels = {
-                f"{row['notification_id']} — {row['event_type']} — {row.get('recipient_email') or row.get('recipient_username') or 'no recipient'}": int(row["notification_id"])
-                for _, row in outbox.iterrows()
-            }
-            chosen = st.selectbox("Select notification to update manually", list(labels.keys()))
-            c6, c7 = st.columns(2)
-            manual_status = c6.selectbox("Manual status", ["Pending", "Sent", "Failed", "Cancelled", "No Email"])
-            manual_error = c7.text_input("Status note / error message")
-            if st.button("Update notification status"):
-                svc.update_notification_status(labels[chosen], manual_status, username, manual_error or None)
-                st.success("Notification status updated.")
-                rerun()
-
-    with tabs[1]:
-        st.markdown("#### RACI-driven email rules")
-        rules = svc.raci_rules_table(active_only=False)
-        safe_df(rules, height=420)
-        csv_download(rules, "raci_email_rules.csv")
-        if role == svc.ADMIN_ROLE and not rules.empty:
-            st.markdown("#### Edit selected RACI rule")
-            labels = {f"{row['event_type']} — {row['activity_decision']}": int(row["rule_id"]) for _, row in rules.iterrows()}
-            chosen_rule = st.selectbox("Rule", list(labels.keys()))
-            rule = rules[rules["rule_id"] == labels[chosen_rule]].iloc[0].to_dict()
-            with st.form("edit_raci_rule"):
-                activity = st.text_input("Activity / decision", value=rule.get("activity_decision") or "")
-                c1, c2, c3, c4 = st.columns(4)
-                raci_options = ["-", "A", "R", "A/R", "C", "I", "A/R (checks)", "R (submit)", "C (provide info)", "R (findings)", "A (raise)"]
-                euc_owner = c1.selectbox("EUC Owner", raci_options, index=option_index(raci_options, rule.get("euc_owner_raci")))
-                dvu = c2.selectbox("Data Validation Unit", raci_options, index=option_index(raci_options, rule.get("data_validation_unit_raci")))
-                gcc = c3.selectbox("GCC", raci_options, index=option_index(raci_options, rule.get("gcc_raci")))
-                group_it = c4.selectbox("Group IT Governance", raci_options, index=option_index(raci_options, rule.get("group_it_governance_raci")))
-                c5, c6, c7, c8 = st.columns(4)
-                iof = c5.selectbox("IOF", raci_options, index=option_index(raci_options, rule.get("iof_raci")))
-                data_gov = c6.selectbox("Data Governance", raci_options, index=option_index(raci_options, rule.get("data_governance_raci")))
-                audit = c7.selectbox("Internal Audit", raci_options, index=option_index(raci_options, rule.get("internal_audit_raci")))
-                grm = c8.selectbox("GRM Strategy / Projects", raci_options, index=option_index(raci_options, rule.get("grm_strategy_raci")))
-                active = st.checkbox("Active", value=bool(rule.get("active_flag")))
-                comments = st.text_area("Maker-checker comments", value=rule.get("maker_checker_comments") or "")
-                if st.form_submit_button("Save RACI rule"):
-                    svc.update_raci_rule(
-                        int(rule["rule_id"]),
-                        {
-                            "activity_decision": activity,
-                            "euc_owner_raci": euc_owner,
-                            "data_validation_unit_raci": dvu,
-                            "gcc_raci": gcc,
-                            "group_it_governance_raci": group_it,
-                            "iof_raci": iof,
-                            "data_governance_raci": data_gov,
-                            "internal_audit_raci": audit,
-                            "grm_strategy_raci": grm,
-                            "active_flag": active,
-                            "maker_checker_comments": comments,
-                        },
-                        username,
-                    )
-                    st.success("RACI email rule updated.")
-                    rerun()
-        elif role != svc.ADMIN_ROLE:
-            st.info("Only Group IT Governance Administrator can edit RACI rules. GCC and Data Validation can view and export them.")
-
-    with tabs[2]:
-        st.markdown("#### Optional SMTP environment variables")
-        st.write("The MVP queues email actions even when no SMTP server is configured. To send emails, configure these environment variables in Streamlit Cloud or the local shell:")
-        st.code("""SMTP_HOST=smtp.example.internal
-SMTP_PORT=587
-SMTP_FROM=ekassotis@eurobank.gr
-SMTP_USER=<optional>
-SMTP_PASSWORD=<optional>
-SMTP_USE_TLS=true""", language="bash")
-        st.info("If SMTP_HOST is missing, the Send button leaves notifications in Pending status and shows a configuration warning. SMTP_FROM defaults to ekassotis@eurobank.gr, while recipient addresses come from the editable User Directory.")
 
 def page_audit() -> None:
     st.title("Audit Trail")
     username, role = current_user()
-    if role not in AUDIT_ACCESS_ROLES:
-        st.warning("Audit Trail is restricted to GCC users.")
-        return
     st.caption("Audit records are immutable from the UI.")
     c1, c2, c3, c4, c5 = st.columns(5)
     entity_type = c1.text_input("Entity type")
@@ -1593,10 +905,6 @@ def page_audit() -> None:
 
 
 def route(page: str) -> None:
-    _, role = current_user()
-    if not can_access_page(page, role):
-        st.warning("You do not have access to this page with the current role.")
-        return
     routes = {
         "Home / Dashboard": page_dashboard,
         "EUC Inventory": page_inventory,
@@ -1616,7 +924,6 @@ def route(page: str) -> None:
         "Industrialization & Decommissioning": page_lifecycle,
         "Reports & KPIs": page_reports,
         "Admin Configuration": page_admin,
-        "Email Notifications": page_notifications,
         "Audit Trail": page_audit,
     }
     routes[page]()

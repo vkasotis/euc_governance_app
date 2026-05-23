@@ -27,93 +27,6 @@ ROLE_SHORT_NAMES = {
     "Internal Audit / Read-only User": "Audit",
 }
 
-RACI_NOTIFICATION_ROLES = [
-    "IOF",
-    "Data Governance",
-    "GRM Strategy & Oversight / Projects (Group Finance)",
-]
-
-DIRECTORY_ROLES = ROLES + RACI_NOTIFICATION_ROLES
-
-RACI_PARTIES = [
-    "EUC Owner",
-    "Data Validation Unit",
-    "GCC",
-    "Group IT Governance",
-    "IOF",
-    "Data Governance",
-    "Internal Audit",
-    "GRM Strategy & Oversight / Projects (Group Finance)",
-]
-
-RACI_RULE_DEFINITIONS = [
-    {
-        "activity_decision": "Define EUC Policy & updates",
-        "event_types": ["POLICY_UPDATED"],
-        "raci": {"EUC Owner": "C", "Data Validation Unit": "C", "GCC": "A/R", "Group IT Governance": "C", "IOF": "C", "Data Governance": "C", "Internal Audit": "C", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-    {
-        "activity_decision": "Maintain EUC Register (platform, taxonomy, controls lists)",
-        "event_types": ["REFERENCE_DATA_UPDATED", "ARTIFACT_RULE_UPDATED", "DUE_DATE_RULE_UPDATED", "USER_PROFILE_UPDATED"],
-        "raci": {"EUC Owner": "C", "Data Validation Unit": "C", "GCC": "C", "Group IT Governance": "A/R", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-    {
-        "activity_decision": "Maintain EUC Register entry (per EUC record accuracy & updates)",
-        "event_types": ["EUC_REGISTERED", "EUC_UPDATED", "EUC_COMPONENT_UPDATED"],
-        "raci": {"EUC Owner": "A/R", "Data Validation Unit": "C", "GCC": "C", "Group IT Governance": "C", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-    {
-        "activity_decision": "Risk Assessment",
-        "event_types": ["RISK_ASSESSMENT_COMPLETED"],
-        "raci": {"EUC Owner": "A/R", "Data Validation Unit": "C", "GCC": "C", "Group IT Governance": "C", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-    {
-        "activity_decision": "Implement controls",
-        "event_types": ["EVIDENCE_SUBMITTED", "EVIDENCE_REVIEWED"],
-        "raci": {"EUC Owner": "A", "Data Validation Unit": "C", "GCC": "C", "Group IT Governance": "-", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-    {
-        "activity_decision": "Independent review",
-        "event_types": ["INDEPENDENT_REVIEW_COMPLETED"],
-        "raci": {"EUC Owner": "C", "Data Validation Unit": "A/R (checks)", "GCC": "C", "Group IT Governance": "-", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-    {
-        "activity_decision": "Material changes",
-        "event_types": ["MATERIAL_CHANGE_LOGGED"],
-        "raci": {"EUC Owner": "A", "Data Validation Unit": "C", "GCC": "C", "Group IT Governance": "-", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-    {
-        "activity_decision": "Industrialization request (submit candidate)",
-        "event_types": ["INDUSTRIALIZATION_REQUESTED"],
-        "raci": {"EUC Owner": "R (submit)", "Data Validation Unit": "C", "GCC": "C", "Group IT Governance": "C", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "C"},
-    },
-    {
-        "activity_decision": "Industrialization assessment & prioritization decision",
-        "event_types": ["INDUSTRIALIZATION_DECISION"],
-        "raci": {"EUC Owner": "C (provide info)", "Data Validation Unit": "C", "GCC": "C", "Group IT Governance": "-", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "A"},
-    },
-    {
-        "activity_decision": "Incident handling",
-        "event_types": ["INCIDENT_HANDLING_UPDATED"],
-        "raci": {"EUC Owner": "A/R", "Data Validation Unit": "C", "GCC": "C", "Group IT Governance": "C", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-    {
-        "activity_decision": "Incident logging / maintenance of EUC Incident Log",
-        "event_types": ["INCIDENT_LOGGED"],
-        "raci": {"EUC Owner": "R", "Data Validation Unit": "C", "GCC": "A/R", "Group IT Governance": "I", "IOF": "I", "Data Governance": "I", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-    {
-        "activity_decision": "Exceptions / risk acceptance",
-        "event_types": ["EXCEPTION_RAISED", "EXCEPTION_DECISION"],
-        "raci": {"EUC Owner": "A (raise)", "Data Validation Unit": "C", "GCC": "R", "Group IT Governance": "C", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-    {
-        "activity_decision": "MI & governance reporting",
-        "event_types": ["FINDING_RAISED", "GOVERNANCE_REPORT_REFRESHED"],
-        "raci": {"EUC Owner": "C", "Data Validation Unit": "R (findings)", "GCC": "A/R", "Group IT Governance": "C", "IOF": "C", "Data Governance": "C", "Internal Audit": "I", "GRM Strategy & Oversight / Projects (Group Finance)": "-"},
-    },
-]
-
 LIFECYCLE_STATUSES = [
     "Draft",
     "Submitted",
@@ -166,27 +79,27 @@ DOCUMENT_TYPES = [
     "Risk Assessment",
     "Operating Procedure",
     "Library of Controls",
-    "Testing Evidence",
-    "UAT Evidence",
-    "Approval Evidence",
-    "Review Evidence",
-    "Reconciliation Evidence",
-    "Resilience Evidence",
-    "Exception Record",
-    "Incident Evidence",
-    "Decommissioning Evidence",
     "Versioning / Change Log Evidence",
     "Design / Logic Evidence",
     "Control Evidence",
+    "Testing Evidence",
+    "UAT Evidence",
+    "Approval Evidence",
     "Access Review Evidence",
+    "Independent / Periodic Review Evidence",
+    "Review Evidence",
+    "Reconciliation Evidence",
+    "Resilience Evidence",
     "Evidence Pack Index",
-    "Change Evidence",
+    "Exception Record",
+    "Incident Evidence",
     "Incident RCA Evidence",
     "Containment / Correction Evidence",
-    "Exception Closure Evidence",
+    "Change Evidence",
     "Archive Evidence",
     "Access Revocation Evidence",
     "Industrialization Assessment Evidence",
+    "Decommissioning Evidence",
 ]
 
 DOCUMENT_STATUSES = [
@@ -251,18 +164,15 @@ REFERENCE_CATEGORIES = [
 ]
 
 DEFAULT_REQUIRED_ARTIFACTS = {
-    # These policy baselines are driven by Overall Inherent Risk.
-    # Residual risk drives remediation, escalation and exception handling, not a reduction of the evidence baseline.
-    "Low": [
-        "Risk Assessment",
-        "Operating Procedure",
-    ],
+    # Baseline artifact rules are driven by Overall Inherent Risk.
+    # Residual risk drives remediation / escalation / exception workflow, not reduced documentation.
+    "Low": ["Risk Assessment", "Operating Procedure"],
     "Medium": [
         "Risk Assessment",
         "Operating Procedure",
         "Versioning / Change Log Evidence",
         "Control Evidence",
-        "Review Evidence",
+        "Independent / Periodic Review Evidence",
     ],
     "High": [
         "Risk Assessment",
@@ -270,10 +180,9 @@ DEFAULT_REQUIRED_ARTIFACTS = {
         "Library of Controls",
         "Versioning / Change Log Evidence",
         "Testing Evidence",
-        "Reconciliation Evidence",
-        "Review Evidence",
         "Access Review Evidence",
-        "Resilience Evidence",
+        "Reconciliation Evidence",
+        "Independent / Periodic Review Evidence",
     ],
     "Very High": [
         "Risk Assessment",
@@ -281,13 +190,14 @@ DEFAULT_REQUIRED_ARTIFACTS = {
         "Library of Controls",
         "Versioning / Change Log Evidence",
         "Design / Logic Evidence",
+        "Control Evidence",
         "Testing Evidence",
         "UAT Evidence",
+        "Access Review Evidence",
         "Reconciliation Evidence",
         "Resilience Evidence",
-        "Review Evidence",
         "Approval Evidence",
-        "Access Review Evidence",
+        "Independent / Periodic Review Evidence",
         "Evidence Pack Index",
     ],
 }
@@ -358,32 +268,13 @@ CREATE_TABLES_SQL = [
         control_effectiveness_score INTEGER NOT NULL,
         inherent_risk TEXT NOT NULL,
         residual_risk TEXT NOT NULL,
-        materiality_q1 TEXT,
-        materiality_q2 TEXT,
-        materiality_q3 TEXT,
-        materially_supports_bcbs239 TEXT,
-        owner_integrity_inherent TEXT,
-        owner_timeliness_inherent TEXT,
-        effective_integrity_inherent TEXT,
-        effective_timeliness_inherent TEXT,
-        integrity_control_effectiveness TEXT,
-        timeliness_control_effectiveness TEXT,
-        integrity_residual_risk TEXT,
-        timeliness_residual_risk TEXT,
-        overall_inherent_risk TEXT,
-        overall_residual_risk TEXT,
-        required_action TEXT,
-        control_registration_risk_assessment TEXT,
-        control_privileged_access TEXT,
-        control_versioning_change_log TEXT,
-        control_checks_reconciliations TEXT,
-        control_library_controls_cacrt TEXT,
-        control_operating_procedure TEXT,
-        control_evidence_signoff TEXT,
-        control_resilience TEXT,
         rationale TEXT,
         trigger_type TEXT,
         version INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'Submitted',
+        reviewed_by TEXT,
+        reviewed_at TEXT,
+        review_comments TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (euc_id) REFERENCES eucs(euc_id)
     );
@@ -532,64 +423,6 @@ CREATE_TABLES_SQL = [
     );
     """,
     """
-    CREATE TABLE IF NOT EXISTS user_profiles (
-        user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        full_name TEXT,
-        email TEXT,
-        role TEXT NOT NULL,
-        active_flag INTEGER NOT NULL DEFAULT 1,
-        maker_checker_comments TEXT,
-        created_by TEXT,
-        created_at TEXT NOT NULL,
-        updated_by TEXT,
-        updated_at TEXT NOT NULL
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS raci_rules (
-        rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        activity_decision TEXT NOT NULL,
-        event_type TEXT NOT NULL UNIQUE,
-        euc_owner_raci TEXT,
-        data_validation_unit_raci TEXT,
-        gcc_raci TEXT,
-        group_it_governance_raci TEXT,
-        iof_raci TEXT,
-        data_governance_raci TEXT,
-        internal_audit_raci TEXT,
-        grm_strategy_raci TEXT,
-        active_flag INTEGER NOT NULL DEFAULT 1,
-        maker_checker_comments TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS notification_outbox (
-        notification_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type TEXT NOT NULL,
-        activity_decision TEXT,
-        entity_type TEXT NOT NULL,
-        entity_id TEXT NOT NULL,
-        euc_id INTEGER,
-        reference_id TEXT,
-        subject TEXT NOT NULL,
-        body TEXT NOT NULL,
-        recipient_username TEXT,
-        recipient_email TEXT,
-        recipient_role TEXT,
-        raci_party TEXT,
-        raci_responsibility TEXT,
-        status TEXT NOT NULL DEFAULT 'Pending',
-        created_by TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        sent_at TEXT,
-        error_message TEXT,
-        FOREIGN KEY (euc_id) REFERENCES eucs(euc_id)
-    );
-    """,
-    """
     CREATE TABLE IF NOT EXISTS audit_trail (
         audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
         entity_type TEXT NOT NULL,
@@ -628,6 +461,14 @@ CREATE_TABLES_SQL = [
         UNIQUE(task_type, risk_level)
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS app_settings (
+        setting_key TEXT PRIMARY KEY,
+        setting_value TEXT,
+        updated_by TEXT,
+        updated_at TEXT
+    );
+    """,
 ]
 
 INDEX_SQL = [
@@ -637,8 +478,4 @@ INDEX_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_tasks_role_status ON tasks(assigned_role, status);",
     "CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status);",
     "CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_trail(entity_type, entity_id);",
-    "CREATE INDEX IF NOT EXISTS idx_user_profiles_role ON user_profiles(role, active_flag);",
-    "CREATE INDEX IF NOT EXISTS idx_raci_rules_event ON raci_rules(event_type, active_flag);",
-    "CREATE INDEX IF NOT EXISTS idx_notification_outbox_status ON notification_outbox(status, created_at);",
-    "CREATE INDEX IF NOT EXISTS idx_notification_outbox_event ON notification_outbox(event_type, entity_type, entity_id);",
 ]
