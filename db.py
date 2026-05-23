@@ -46,13 +46,20 @@ def get_connection() -> Iterable[sqlite3.Connection]:
 
 
 def init_db() -> None:
-    """Create database objects. Safe to run repeatedly."""
+    """Create database objects and migrate older local databases safely.
+
+    Streamlit Cloud preserves the SQLite file between source deployments. When
+    a new release adds columns to a table that already exists, SQLite does not
+    apply those additions from CREATE TABLE IF NOT EXISTS. Lightweight
+    migrations therefore have to run before index creation and before any
+    reference-data seeding.
+    """
     with get_connection() as conn:
         for stmt in CREATE_TABLES_SQL:
             conn.execute(stmt)
+        _apply_lightweight_migrations(conn)
         for stmt in INDEX_SQL:
             conn.execute(stmt)
-        _apply_lightweight_migrations(conn)
 
 
 def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
@@ -63,8 +70,102 @@ def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
             "decommissioning_rationale": "TEXT",
             "mapping_na_justification": "TEXT",
         },
-        "documents": {"deficiency_tag": "TEXT"},
+        "documents": {
+            "deficiency_tag": "TEXT",
+            "evidence_group_id": "TEXT",
+        },
         "exceptions": {"closure_evidence_document_id": "INTEGER"},
+        "user_profiles": {
+            "username": "TEXT",
+            "full_name": "TEXT",
+            "email": "TEXT",
+            "role": "TEXT",
+            "active_flag": "INTEGER DEFAULT 1",
+            "maker_checker_comments": "TEXT",
+            "created_by": "TEXT",
+            "created_at": "TEXT",
+            "updated_by": "TEXT",
+            "updated_at": "TEXT",
+        },
+        "raci_rules": {
+            "activity_decision": "TEXT",
+            "event_type": "TEXT",
+            "euc_owner_raci": "TEXT",
+            "data_validation_unit_raci": "TEXT",
+            "gcc_raci": "TEXT",
+            "group_it_governance_raci": "TEXT",
+            "iof_raci": "TEXT",
+            "data_governance_raci": "TEXT",
+            "internal_audit_raci": "TEXT",
+            "grm_strategy_raci": "TEXT",
+            "active_flag": "INTEGER DEFAULT 1",
+            "maker_checker_comments": "TEXT",
+            "created_at": "TEXT",
+            "updated_at": "TEXT",
+        },
+        "notification_outbox": {
+            "event_type": "TEXT",
+            "activity_decision": "TEXT",
+            "entity_type": "TEXT",
+            "entity_id": "TEXT",
+            "euc_id": "INTEGER",
+            "reference_id": "TEXT",
+            "subject": "TEXT",
+            "body": "TEXT",
+            "recipient_username": "TEXT",
+            "recipient_email": "TEXT",
+            "recipient_role": "TEXT",
+            "raci_party": "TEXT",
+            "raci_responsibility": "TEXT",
+            "status": "TEXT DEFAULT 'Pending'",
+            "created_by": "TEXT",
+            "created_at": "TEXT",
+            "sent_at": "TEXT",
+            "error_message": "TEXT",
+        },
+        "bcbs239_outputs": {
+            "output_name": "TEXT",
+            "output_type": "TEXT DEFAULT 'Material Report'",
+            "owner": "TEXT",
+            "active_flag": "INTEGER DEFAULT 1",
+            "maker_checker_comments": "TEXT",
+            "created_by": "TEXT",
+            "created_at": "TEXT",
+            "updated_by": "TEXT",
+            "updated_at": "TEXT",
+        },
+        "reference_data": {
+            "category": "TEXT",
+            "value": "TEXT",
+            "active_flag": "INTEGER DEFAULT 1",
+            "maker_checker_comments": "TEXT",
+            "proposed_by": "TEXT",
+            "approved_by": "TEXT",
+            "approval_status": "TEXT DEFAULT 'Approved'",
+        },
+        "due_date_rules": {
+            "task_type": "TEXT",
+            "risk_level": "TEXT DEFAULT 'Any'",
+            "due_days": "INTEGER DEFAULT 7",
+            "active_flag": "INTEGER DEFAULT 1",
+            "maker_checker_comments": "TEXT",
+            "proposed_by": "TEXT",
+            "approved_by": "TEXT",
+            "approval_status": "TEXT DEFAULT 'Approved'",
+        },
+        "required_artifact_rules": {
+            "risk_level": "TEXT",
+            "lifecycle_stage": "TEXT DEFAULT 'Any'",
+            "required_document_type": "TEXT",
+            "control_area": "TEXT",
+            "cacrt_dimension": "TEXT",
+            "mandatory_flag": "INTEGER DEFAULT 1",
+            "maker_checker_comments": "TEXT",
+            "proposed_by": "TEXT",
+            "approved_by": "TEXT",
+            "approval_status": "TEXT DEFAULT 'Approved'",
+            "what_to_upload": "TEXT",
+        },
         "risk_assessments": {
             "materiality_q1": "TEXT",
             "materiality_q2": "TEXT",
