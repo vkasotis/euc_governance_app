@@ -821,6 +821,22 @@ CREATE_TABLES_SQL = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS custom_report_definitions (
+        report_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        report_name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        dataset TEXT NOT NULL,
+        selected_columns TEXT,
+        filters_json TEXT,
+        active_flag INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_by TEXT,
+        updated_at TEXT NOT NULL
+    );
+    """,
+
+    """
     CREATE TABLE IF NOT EXISTS audit_trail (
         audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
         entity_type TEXT NOT NULL,
@@ -873,4 +889,5 @@ INDEX_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_notification_outbox_status ON notification_outbox(status, created_at);",
     "CREATE INDEX IF NOT EXISTS idx_notification_outbox_event ON notification_outbox(event_type, entity_type, entity_id);",
     "CREATE INDEX IF NOT EXISTS idx_bcbs239_outputs_active ON bcbs239_outputs(active_flag, output_name);",
+    "CREATE INDEX IF NOT EXISTS idx_custom_reports_active ON custom_report_definitions(active_flag, report_name);",
 ]

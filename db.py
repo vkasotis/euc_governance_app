@@ -166,6 +166,18 @@ def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
             "approval_status": "TEXT DEFAULT 'Approved'",
             "what_to_upload": "TEXT",
         },
+        "custom_report_definitions": {
+            "report_name": "TEXT",
+            "description": "TEXT",
+            "dataset": "TEXT",
+            "selected_columns": "TEXT",
+            "filters_json": "TEXT",
+            "active_flag": "INTEGER DEFAULT 1",
+            "created_by": "TEXT",
+            "created_at": "TEXT",
+            "updated_by": "TEXT",
+            "updated_at": "TEXT",
+        },
         "risk_assessments": {
             "materiality_q1": "TEXT",
             "materiality_q2": "TEXT",

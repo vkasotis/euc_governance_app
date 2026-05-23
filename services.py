@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -3273,6 +3274,521 @@ def report_table(filters: dict[str, Any]) -> pd.DataFrame:
     return dataframe(sql, tuple(params))
 
 
+
+# ---------------------------------------------------------------------------
+# Policy MI, KPI and custom reporting
+# ---------------------------------------------------------------------------
+
+POLICY_REPORTS = [
+    {
+        "key": "inventory_risk_profile",
+        "name": "Inventory coverage & risk profile distribution",
+        "policy_basis": "Policy 2.2.7 requires inventory coverage, overall inherent/residual risk distribution, overdue reviews, exception ageing, incidents, remediation and industrialization pipeline, and area segments.",
+        "description": "Portfolio view by business unit, lifecycle, inherent risk, residual risk and documentation completeness.",
+    },
+    {
+        "key": "bcbs_output_coverage",
+        "name": "EUC ↔ BCBS 239 output coverage",
+        "policy_basis": "Policy 2.2.7 requires coverage of linkages to BCBS 239 in-scope outputs and completeness of operationalization documentation.",
+        "description": "Shows EUCs mapped to BCBS 239 outputs and whether operating/operationalization documentation is accepted.",
+    },
+    {
+        "key": "inventory_quality",
+        "name": "Inventory completeness & quality report",
+        "policy_basis": "Policy 2.2.2 requires an annual completeness and quality report covering missing mappings, overdue reviews and High/Very High inherent-risk coverage.",
+        "description": "Flags missing mappings, overdue reviews, incomplete evidence packs and High/Very High inherent EUCs without accepted key evidence.",
+    },
+    {
+        "key": "library_kpis",
+        "name": "Library of Controls KPI",
+        "policy_basis": "Policy 2.2.7 requires % EUCs with Library of Controls.",
+        "description": "Shows accepted Library of Controls coverage by business unit and risk band.",
+    },
+    {
+        "key": "cacrt_coverage",
+        "name": "CACRT coverage per EUC and dimension",
+        "policy_basis": "Policy 2.2.7 requires % CACRT coverage per EUC and per CACRT dimension.",
+        "description": "Rule-based coverage of accepted/satisfied artifacts mapped to CACRT dimensions.",
+    },
+    {
+        "key": "incident_resolution",
+        "name": "Incidents and resolution time",
+        "policy_basis": "Policy 2.2.7 requires incidents and resolution-time KPIs.",
+        "description": "Incident log with ageing/resolution indicators and affected outputs.",
+    },
+    {
+        "key": "exception_ageing",
+        "name": "Exception ageing and expiry",
+        "policy_basis": "Policy 2.2.7 requires exception ageing as part of MI and governance reporting.",
+        "description": "Open/approved/rejected exceptions with age, days to expiry and residual-risk context.",
+    },
+    {
+        "key": "remediation_pipeline",
+        "name": "Remediation and findings pipeline",
+        "policy_basis": "Policy 2.2.7 requires remediation pipeline reporting; RACI assigns Data Validation findings and GCC governance reporting accountability.",
+        "description": "Open tasks and findings by owner, severity, due date and ageing.",
+    },
+    {
+        "key": "industrialization_pipeline",
+        "name": "Industrialization and decommissioning pipeline",
+        "policy_basis": "Policy 2.2.7 and lifecycle rules require industrialization pipeline and decommissioning status visibility.",
+        "description": "Industrialization candidates, decommissioned/archived EUCs and scoring signals.",
+    },
+    {
+        "key": "overdue_reviews",
+        "name": "Overdue reviews",
+        "policy_basis": "Policy 2.2.2 and 2.2.7 require reporting of overdue reviews.",
+        "description": "EUCs with next review date before today.",
+    },
+]
+
+CUSTOM_REPORT_DATASETS = {
+    "EUC Portfolio": "euc_portfolio",
+    "Tasks": "tasks",
+    "Documents / Evidence": "documents",
+    "Risk Assessments": "risk_assessments",
+    "Findings": "findings",
+    "Exceptions": "exceptions",
+    "Incidents": "incidents",
+    "Material Changes": "material_changes",
+    "Components / Assets": "components",
+}
+
+
+def policy_report_catalog() -> list[dict[str, str]]:
+    return POLICY_REPORTS.copy()
+
+
+def custom_report_dataset_names() -> list[str]:
+    return list(CUSTOM_REPORT_DATASETS.keys())
+
+
+def _report_euc_where(filters: dict[str, Any] | None, alias: str = "e") -> tuple[str, list[Any]]:
+    filters = filters or {}
+    where = []
+    params: list[Any] = []
+    a = alias
+    if filters.get("owner") and filters["owner"] != "All":
+        where.append(f"{a}.owner = ?")
+        params.append(filters["owner"])
+    if filters.get("business_unit") and filters["business_unit"] != "All":
+        where.append(f"{a}.business_unit = ?")
+        params.append(filters["business_unit"])
+    if filters.get("inherent_risk") and filters["inherent_risk"] != "All":
+        where.append(f"e.inherent_risk = ?")
+        params.append(filters["inherent_risk"])
+    if filters.get("residual_risk") and filters["residual_risk"] != "All":
+        where.append(f"{a}.residual_risk = ?")
+        params.append(filters["residual_risk"])
+    if filters.get("lifecycle_status") and filters["lifecycle_status"] != "All":
+        where.append(f"{a}.lifecycle_status = ?")
+        params.append(filters["lifecycle_status"])
+    if filters.get("output_mapping"):
+        where.append(f"lower({a}.bcbs239_output_mapping) LIKE lower(?)")
+        params.append(f"%{filters['output_mapping']}%")
+    return (" AND ".join(where) if where else "1=1", params)
+
+
+def policy_kpi_cards(filters: dict[str, Any] | None = None) -> dict[str, Any]:
+    where, params = _report_euc_where(filters, "e")
+    row = fetch_one(
+        f"""
+        SELECT
+            COUNT(*) AS total_eucs,
+            SUM(CASE WHEN COALESCE(NULLIF(TRIM(e.bcbs239_output_mapping), ''), '') <> '' THEN 1 ELSE 0 END) AS mapped_eucs,
+            SUM(CASE WHEN e.documentation_completeness_status = 'Complete' THEN 1 ELSE 0 END) AS docs_complete,
+            SUM(CASE WHEN e.inherent_risk IN ('High','Very High') THEN 1 ELSE 0 END) AS high_vh_inherent,
+            SUM(CASE WHEN e.residual_risk IN ('High','Very High') THEN 1 ELSE 0 END) AS high_vh_residual,
+            SUM(CASE WHEN e.next_review_date IS NOT NULL AND date(e.next_review_date) < date('now') THEN 1 ELSE 0 END) AS overdue_reviews,
+            SUM(CASE WHEN e.lifecycle_status = 'Industrialization Candidate' THEN 1 ELSE 0 END) AS industrialization_candidates,
+            SUM(CASE WHEN e.lifecycle_status IN ('Decommissioned','Archived') THEN 1 ELSE 0 END) AS decommissioned_archived
+        FROM eucs e
+        WHERE {where}
+        """,
+        tuple(params),
+    ) or {}
+    incident_row = fetch_one(
+        f"""
+        SELECT COUNT(DISTINCT i.incident_id) AS open_incidents
+        FROM incidents i JOIN eucs e ON e.euc_id = i.euc_id
+        WHERE {where} AND COALESCE(i.status, 'Open') NOT IN ('Closed','Cancelled')
+        """,
+        tuple(params),
+    ) or {}
+    exception_row = fetch_one(
+        f"""
+        SELECT COUNT(DISTINCT ex.exception_id) AS open_exceptions
+        FROM exceptions ex JOIN eucs e ON e.euc_id = ex.euc_id
+        WHERE {where} AND COALESCE(ex.status, 'Open') NOT IN ('Closed','Cancelled','Withdrawn')
+        """,
+        tuple(params),
+    ) or {}
+    remediation_row = fetch_one(
+        f"""
+        SELECT COUNT(DISTINCT t.task_id) AS open_remediation
+        FROM tasks t LEFT JOIN eucs e ON e.euc_id = t.euc_id
+        WHERE {where} AND t.status NOT IN ('Closed','Cancelled')
+          AND t.task_type IN ('Remediation','Missing evidence','Review response','Closure evidence','Reassessment','Documentation refresh')
+        """,
+        tuple(params),
+    ) or {}
+    library_row = fetch_one(
+        f"""
+        SELECT COUNT(DISTINCT e.euc_id) AS total_eucs,
+               COUNT(DISTINCT CASE WHEN d.status = 'Accepted' THEN e.euc_id END) AS with_library
+        FROM eucs e
+        LEFT JOIN documents d ON d.euc_id = e.euc_id AND d.document_type = 'Library of Controls'
+        WHERE {where}
+        """,
+        tuple(params),
+    ) or {}
+    op_row = fetch_one(
+        f"""
+        SELECT COUNT(DISTINCT CASE WHEN COALESCE(NULLIF(TRIM(e.bcbs239_output_mapping), ''), '') <> '' THEN e.euc_id END) AS mapped_eucs,
+               COUNT(DISTINCT CASE WHEN COALESCE(NULLIF(TRIM(e.bcbs239_output_mapping), ''), '') <> '' AND d.status = 'Accepted' THEN e.euc_id END) AS with_operationalization_doc
+        FROM eucs e
+        LEFT JOIN documents d ON d.euc_id = e.euc_id AND d.document_type = 'Operating Procedure'
+        WHERE {where}
+        """,
+        tuple(params),
+    ) or {}
+    total = int(row.get("total_eucs") or 0)
+    with_library = int(library_row.get("with_library") or 0)
+    mapped = int(op_row.get("mapped_eucs") or 0)
+    with_op = int(op_row.get("with_operationalization_doc") or 0)
+    return {
+        "Total EUCs": total,
+        "BCBS-mapped EUCs": int(row.get("mapped_eucs") or 0),
+        "Docs complete": int(row.get("docs_complete") or 0),
+        "High / Very High inherent": int(row.get("high_vh_inherent") or 0),
+        "High / Very High residual": int(row.get("high_vh_residual") or 0),
+        "Overdue reviews": int(row.get("overdue_reviews") or 0),
+        "Open incidents": int(incident_row.get("open_incidents") or 0),
+        "Open exceptions": int(exception_row.get("open_exceptions") or 0),
+        "Open remediation items": int(remediation_row.get("open_remediation") or 0),
+        "Industrialization candidates": int(row.get("industrialization_candidates") or 0),
+        "Library of Controls coverage %": round((with_library / total * 100), 1) if total else 0.0,
+        "Operationalization documentation %": round((with_op / mapped * 100), 1) if mapped else 0.0,
+    }
+
+
+def policy_report_charts(filters: dict[str, Any] | None = None) -> dict[str, pd.DataFrame]:
+    where, params = _report_euc_where(filters, "e")
+    return {
+        "inherent_risk": dataframe(f"SELECT e.inherent_risk AS risk_level, COUNT(*) AS count FROM eucs e WHERE {where} GROUP BY e.inherent_risk", tuple(params)),
+        "residual_risk": dataframe(f"SELECT e.residual_risk AS risk_level, COUNT(*) AS count FROM eucs e WHERE {where} GROUP BY e.residual_risk", tuple(params)),
+        "lifecycle": dataframe(f"SELECT e.lifecycle_status, COUNT(*) AS count FROM eucs e WHERE {where} GROUP BY e.lifecycle_status ORDER BY count DESC", tuple(params)),
+        "business_unit": dataframe(f"SELECT e.business_unit, COUNT(*) AS count FROM eucs e WHERE {where} GROUP BY e.business_unit ORDER BY count DESC", tuple(params)),
+    }
+
+
+def _accepted_doc_exists_sql(doc_type: str) -> str:
+    safe = doc_type.replace("'", "''")
+    return f"EXISTS (SELECT 1 FROM documents d WHERE d.euc_id = e.euc_id AND d.document_type = '{safe}' AND d.status = 'Accepted')"
+
+
+def run_policy_report(report_key: str, filters: dict[str, Any] | None = None) -> pd.DataFrame:
+    where, params = _report_euc_where(filters, "e")
+    if report_key == "inventory_risk_profile":
+        return dataframe(
+            f"""
+            SELECT e.business_unit, e.lifecycle_status, e.inherent_risk, e.residual_risk,
+                   e.documentation_completeness_status,
+                   COUNT(*) AS euc_count,
+                   SUM(CASE WHEN e.spof_indicator = 'Yes' THEN 1 ELSE 0 END) AS spof_count,
+                   SUM(CASE WHEN e.next_review_date IS NOT NULL AND date(e.next_review_date) < date('now') THEN 1 ELSE 0 END) AS overdue_reviews
+            FROM eucs e
+            WHERE {where}
+            GROUP BY e.business_unit, e.lifecycle_status, e.inherent_risk, e.residual_risk, e.documentation_completeness_status
+            ORDER BY e.business_unit, e.inherent_risk DESC, e.residual_risk DESC
+            """,
+            tuple(params),
+        )
+    if report_key == "bcbs_output_coverage":
+        return dataframe(
+            f"""
+            SELECT e.reference_id, e.name, e.owner, e.business_unit,
+                   e.bcbs239_output_mapping,
+                   CASE WHEN COALESCE(NULLIF(TRIM(e.bcbs239_output_mapping), ''), '') = '' THEN 'Missing mapping' ELSE 'Mapped' END AS mapping_status,
+                   CASE WHEN {_accepted_doc_exists_sql('Operating Procedure')} THEN 'Accepted' ELSE 'Missing / not accepted' END AS operating_procedure_status,
+                   CASE WHEN {_accepted_doc_exists_sql('Evidence Pack Index')} THEN 'Accepted' ELSE 'Missing / not accepted' END AS evidence_index_status,
+                   e.documentation_completeness_status, e.lifecycle_status, e.inherent_risk, e.residual_risk
+            FROM eucs e
+            WHERE {where}
+            ORDER BY mapping_status DESC, e.business_unit, e.reference_id
+            """,
+            tuple(params),
+        )
+    if report_key == "inventory_quality":
+        return dataframe(
+            f"""
+            SELECT e.reference_id, e.name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk, e.lifecycle_status,
+                   e.documentation_completeness_status, e.next_review_date,
+                   CASE WHEN COALESCE(NULLIF(TRIM(e.bcbs239_output_mapping), ''), '') = '' THEN 1 ELSE 0 END AS missing_bcbs_mapping,
+                   CASE WHEN e.next_review_date IS NOT NULL AND date(e.next_review_date) < date('now') THEN 1 ELSE 0 END AS overdue_review,
+                   CASE WHEN e.inherent_risk IN ('High','Very High') THEN 1 ELSE 0 END AS high_vh_inherent,
+                   CASE WHEN e.inherent_risk IN ('High','Very High') AND {_accepted_doc_exists_sql('Library of Controls')} THEN 1 ELSE 0 END AS high_vh_library_accepted,
+                   CASE WHEN e.inherent_risk IN ('High','Very High') AND {_accepted_doc_exists_sql('Reconciliation Evidence')} THEN 1 ELSE 0 END AS high_vh_reconciliation_accepted,
+                   CASE WHEN e.inherent_risk IN ('High','Very High') AND {_accepted_doc_exists_sql('Resilience Evidence')} THEN 1 ELSE 0 END AS high_vh_resilience_accepted
+            FROM eucs e
+            WHERE {where}
+            ORDER BY missing_bcbs_mapping DESC, overdue_review DESC, e.inherent_risk DESC, e.reference_id
+            """,
+            tuple(params),
+        )
+    if report_key == "library_kpis":
+        return dataframe(
+            f"""
+            SELECT e.business_unit, e.inherent_risk,
+                   COUNT(DISTINCT e.euc_id) AS total_eucs,
+                   COUNT(DISTINCT CASE WHEN d.status = 'Accepted' THEN e.euc_id END) AS eucs_with_accepted_library,
+                   ROUND(100.0 * COUNT(DISTINCT CASE WHEN d.status = 'Accepted' THEN e.euc_id END) / NULLIF(COUNT(DISTINCT e.euc_id), 0), 1) AS library_coverage_pct
+            FROM eucs e
+            LEFT JOIN documents d ON d.euc_id = e.euc_id AND d.document_type = 'Library of Controls'
+            WHERE {where}
+            GROUP BY e.business_unit, e.inherent_risk
+            ORDER BY e.business_unit, e.inherent_risk DESC
+            """,
+            tuple(params),
+        )
+    if report_key == "cacrt_coverage":
+        eucs = dataframe(f"SELECT e.euc_id, e.reference_id, e.name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk FROM eucs e WHERE {where} ORDER BY e.reference_id", tuple(params))
+        rows: list[dict[str, Any]] = []
+        for _, euc in eucs.iterrows():
+            checklist = artifact_checklist(int(euc["euc_id"]))
+            if checklist.empty:
+                rows.append({**euc.to_dict(), "cacrt_dimension": "No rule", "required_artifacts": 0, "accepted_or_satisfied": 0, "coverage_pct": 0.0})
+                continue
+            checklist = checklist.copy()
+            checklist["cacrt_dimension"] = checklist["cacrt_dimension"].fillna("Unmapped")
+            for dim, group in checklist.groupby("cacrt_dimension"):
+                required = len(group)
+                accepted = int(group["status"].isin(["Accepted"]).sum())
+                rows.append({**euc.to_dict(), "cacrt_dimension": dim, "required_artifacts": required, "accepted_or_satisfied": accepted, "coverage_pct": round(accepted / required * 100, 1) if required else 0.0})
+        return pd.DataFrame(rows)
+    if report_key == "incident_resolution":
+        return dataframe(
+            f"""
+            SELECT i.incident_id, e.reference_id, e.name, e.owner, e.business_unit, e.residual_risk,
+                   i.affected_outputs, i.incident_date, i.impact_summary,
+                   i.containment_status, i.correction_status, i.rca_status, COALESCE(i.status, 'Open') AS status,
+                   CAST(julianday(CASE WHEN COALESCE(i.status, 'Open') = 'Closed' THEN i.created_at ELSE date('now') END) - julianday(i.incident_date) AS INTEGER) AS days_since_incident
+            FROM incidents i JOIN eucs e ON e.euc_id = i.euc_id
+            WHERE {where}
+            ORDER BY status, days_since_incident DESC
+            """,
+            tuple(params),
+        )
+    if report_key == "exception_ageing":
+        return dataframe(
+            f"""
+            SELECT ex.exception_id, e.reference_id, e.name, e.owner, e.business_unit,
+                   ex.control_gap, ex.residual_risk, ex.approval_status, COALESCE(ex.status, 'Open') AS status,
+                   ex.target_date, ex.expiry_date,
+                   CAST(julianday(date('now')) - julianday(ex.created_at) AS INTEGER) AS age_days,
+                   CASE WHEN ex.expiry_date IS NOT NULL THEN CAST(julianday(ex.expiry_date) - julianday(date('now')) AS INTEGER) END AS days_to_expiry
+            FROM exceptions ex JOIN eucs e ON e.euc_id = ex.euc_id
+            WHERE {where}
+            ORDER BY status, days_to_expiry, age_days DESC
+            """,
+            tuple(params),
+        )
+    if report_key == "remediation_pipeline":
+        tasks = dataframe(
+            f"""
+            SELECT 'Task' AS item_type, t.task_id AS item_id, e.reference_id, e.name, e.owner, e.business_unit,
+                   t.task_type AS category, t.title AS summary, t.assigned_to, t.assigned_role, t.priority, t.status, t.due_date,
+                   CASE WHEN t.due_date IS NOT NULL AND date(t.due_date) < date('now') AND t.status NOT IN ('Closed','Cancelled') THEN 1 ELSE 0 END AS overdue
+            FROM tasks t LEFT JOIN eucs e ON e.euc_id = t.euc_id
+            WHERE {where} AND t.status NOT IN ('Closed','Cancelled')
+            """,
+            tuple(params),
+        )
+        findings = dataframe(
+            f"""
+            SELECT 'Finding' AS item_type, f.finding_id AS item_id, e.reference_id, e.name, e.owner, e.business_unit,
+                   f.severity AS category, f.finding_description AS summary, f.assigned_to, NULL AS assigned_role,
+                   f.severity AS priority, f.status, f.due_date,
+                   CASE WHEN f.due_date IS NOT NULL AND date(f.due_date) < date('now') AND f.status NOT IN ('Closed','Cancelled') THEN 1 ELSE 0 END AS overdue
+            FROM findings f JOIN eucs e ON e.euc_id = f.euc_id
+            WHERE {where} AND f.status NOT IN ('Closed','Cancelled')
+            """,
+            tuple(params),
+        )
+        return pd.concat([tasks, findings], ignore_index=True, sort=False) if not tasks.empty or not findings.empty else pd.DataFrame()
+    if report_key == "industrialization_pipeline":
+        return dataframe(
+            f"""
+            SELECT e.reference_id, e.name, e.owner, e.business_unit, e.technology_type, e.frequency,
+                   e.inherent_risk, e.residual_risk, e.spof_indicator, e.lifecycle_status,
+                   e.industrialization_rationale, e.decommissioning_rationale,
+                   COUNT(DISTINCT i.incident_id) AS incident_count,
+                   COUNT(DISTINCT CASE WHEN t.status NOT IN ('Closed','Cancelled') THEN t.task_id END) AS open_tasks,
+                   (CASE WHEN COALESCE(NULLIF(TRIM(e.bcbs239_output_mapping), ''), '') <> '' THEN 5 ELSE 0 END
+                    + CASE WHEN e.residual_risk IN ('High','Very High') THEN 4 ELSE 0 END
+                    + CASE WHEN e.spof_indicator = 'Yes' THEN 4 ELSE 0 END
+                    + CASE WHEN e.frequency IN ('Daily','Weekly') THEN 3 ELSE 0 END) AS indicative_score
+            FROM eucs e
+            LEFT JOIN incidents i ON i.euc_id = e.euc_id
+            LEFT JOIN tasks t ON t.euc_id = e.euc_id
+            WHERE {where} AND (e.lifecycle_status IN ('Industrialization Candidate','Decommissioned','Archived') OR e.residual_risk IN ('High','Very High') OR e.spof_indicator = 'Yes')
+            GROUP BY e.euc_id
+            ORDER BY indicative_score DESC, e.residual_risk DESC, e.reference_id
+            """,
+            tuple(params),
+        )
+    if report_key == "overdue_reviews":
+        return dataframe(
+            f"""
+            SELECT e.reference_id, e.name, e.owner, e.owner_delegate, e.business_unit,
+                   e.inherent_risk, e.residual_risk, e.lifecycle_status, e.next_review_date,
+                   CAST(julianday(date('now')) - julianday(e.next_review_date) AS INTEGER) AS days_overdue
+            FROM eucs e
+            WHERE {where} AND e.next_review_date IS NOT NULL AND date(e.next_review_date) < date('now')
+            ORDER BY days_overdue DESC, e.residual_risk DESC
+            """,
+            tuple(params),
+        )
+    return pd.DataFrame()
+
+
+def _custom_dataset_df(dataset: str) -> pd.DataFrame:
+    if dataset == "EUC Portfolio":
+        return dataframe("SELECT * FROM eucs ORDER BY reference_id")
+    if dataset == "Tasks":
+        return get_tasks(open_only=False)
+    if dataset == "Documents / Evidence":
+        return dataframe("""
+            SELECT d.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk, e.lifecycle_status
+            FROM documents d JOIN eucs e ON e.euc_id = d.euc_id ORDER BY d.uploaded_at DESC
+        """)
+    if dataset == "Risk Assessments":
+        return dataframe("""
+            SELECT r.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit, e.lifecycle_status
+            FROM risk_assessments r JOIN eucs e ON e.euc_id = r.euc_id ORDER BY r.assessment_date DESC, r.assessment_id DESC
+        """)
+    if dataset == "Findings":
+        return dataframe("""
+            SELECT f.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk
+            FROM findings f JOIN eucs e ON e.euc_id = f.euc_id ORDER BY f.created_at DESC
+        """)
+    if dataset == "Exceptions":
+        return dataframe("""
+            SELECT ex.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit, e.inherent_risk
+            FROM exceptions ex JOIN eucs e ON e.euc_id = ex.euc_id ORDER BY ex.created_at DESC
+        """)
+    if dataset == "Incidents":
+        return dataframe("""
+            SELECT i.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk
+            FROM incidents i JOIN eucs e ON e.euc_id = i.euc_id ORDER BY i.incident_date DESC
+        """)
+    if dataset == "Material Changes":
+        return dataframe("""
+            SELECT m.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk
+            FROM material_changes m JOIN eucs e ON e.euc_id = m.euc_id ORDER BY m.created_at DESC
+        """)
+    if dataset == "Components / Assets":
+        return dataframe("""
+            SELECT c.*, e.reference_id, e.name AS euc_name, e.owner AS euc_owner, e.business_unit, e.inherent_risk, e.residual_risk
+            FROM components c JOIN eucs e ON e.euc_id = c.euc_id ORDER BY e.reference_id, c.component_name
+        """)
+    return pd.DataFrame()
+
+
+def custom_report_dataset_columns(dataset: str) -> list[str]:
+    df = _custom_dataset_df(dataset)
+    return list(df.columns)
+
+
+def _apply_custom_filters(df: pd.DataFrame, filters: dict[str, Any] | None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    filters = filters or {}
+    out = df.copy()
+    for col, val in filters.items():
+        if val in (None, "", "All", []):
+            continue
+        if col not in out.columns:
+            continue
+        if isinstance(val, list):
+            out = out[out[col].astype(str).isin([str(v) for v in val])]
+        else:
+            out = out[out[col].astype(str).str.contains(str(val), case=False, na=False)]
+    return out
+
+
+def custom_report_definitions_table(active_only: bool = True) -> pd.DataFrame:
+    where = "WHERE active_flag = 1" if active_only else ""
+    return dataframe(f"SELECT * FROM custom_report_definitions {where} ORDER BY report_name")
+
+
+def get_custom_report_definition(report_id: int) -> dict[str, Any] | None:
+    return fetch_one("SELECT * FROM custom_report_definitions WHERE report_id = ?", (report_id,))
+
+
+def upsert_custom_report_definition(payload: dict[str, Any], username: str, report_id: int | None = None) -> int:
+    now = utc_now()
+    selected_columns = json.dumps(payload.get("selected_columns") or [], ensure_ascii=False)
+    filters_json = json.dumps(payload.get("filters") or {}, ensure_ascii=False)
+    if report_id:
+        old = get_custom_report_definition(report_id)
+        if not old:
+            raise ValueError("Custom report definition not found")
+        execute(
+            """
+            UPDATE custom_report_definitions
+            SET report_name = ?, description = ?, dataset = ?, selected_columns = ?, filters_json = ?, active_flag = ?, updated_by = ?, updated_at = ?
+            WHERE report_id = ?
+            """,
+            (
+                payload.get("report_name"), payload.get("description"), payload.get("dataset"), selected_columns,
+                filters_json, 1 if payload.get("active_flag", True) else 0, username, now, report_id,
+            ),
+        )
+        insert_audit("Custom Report", report_id, "UPDATE", username, old, payload)
+        return report_id
+    report_id = execute(
+        """
+        INSERT INTO custom_report_definitions(report_name, description, dataset, selected_columns, filters_json, active_flag, created_by, created_at, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload.get("report_name"), payload.get("description"), payload.get("dataset"), selected_columns,
+            filters_json, 1 if payload.get("active_flag", True) else 0, username, now, username, now,
+        ),
+    )
+    insert_audit("Custom Report", report_id, "CREATE", username, None, payload)
+    return report_id
+
+
+def run_custom_report_definition(report_id: int) -> pd.DataFrame:
+    definition = get_custom_report_definition(report_id)
+    if not definition:
+        return pd.DataFrame()
+    dataset = definition.get("dataset")
+    df = _custom_dataset_df(dataset)
+    try:
+        filters = json.loads(definition.get("filters_json") or "{}")
+    except Exception:
+        filters = {}
+    df = _apply_custom_filters(df, filters)
+    try:
+        columns = json.loads(definition.get("selected_columns") or "[]")
+    except Exception:
+        columns = []
+    existing_cols = [c for c in columns if c in df.columns]
+    if existing_cols:
+        df = df[existing_cols]
+    return df
+
+
+def deactivate_custom_report_definition(report_id: int, username: str) -> None:
+    old = get_custom_report_definition(report_id)
+    if not old:
+        return
+    execute("UPDATE custom_report_definitions SET active_flag = 0, updated_by = ?, updated_at = ? WHERE report_id = ?", (username, utc_now(), report_id))
+    insert_audit("Custom Report", report_id, "DEACTIVATE", username, old, {"active_flag": 0})
+
 def audit_trail(filters: dict[str, Any] | None = None) -> pd.DataFrame:
     filters = filters or {}
     where = []
@@ -3391,7 +3907,7 @@ def delete_all_euc_operational_data(username: str) -> dict[str, Any]:
     """Delete all EUC operational data while preserving users and configuration.
 
     Preserved tables: user_profiles, raci_rules, reference_data,
-    required_artifact_rules, due_date_rules, and audit_trail. The audit trail is
+    required_artifact_rules, due_date_rules, custom_report_definitions, and audit_trail. The audit trail is
     preserved for governance, and this purge action is itself recorded.
     """
     tables_in_delete_order = [
@@ -3442,6 +3958,7 @@ def delete_all_euc_operational_data(username: str) -> dict[str, Any]:
             "reference_data",
             "required_artifact_rules",
             "due_date_rules",
+            "custom_report_definitions",
             "audit_trail",
         ],
     }

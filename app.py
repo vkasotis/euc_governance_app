@@ -1496,26 +1496,137 @@ def page_lifecycle() -> None:
                     rerun()
 
 
+
+def _reports_filter_controls(df: pd.DataFrame, key_prefix: str = "reports") -> dict[str, Any]:
+    """Common filters for policy reports and custom report previews."""
+    c1, c2, c3, c4 = st.columns(4)
+    owners = ["All"] + sorted(df["owner"].dropna().astype(str).unique().tolist()) if df is not None and not df.empty and "owner" in df.columns else ["All"]
+    units = ["All"] + sorted(df["business_unit"].dropna().astype(str).unique().tolist()) if df is not None and not df.empty and "business_unit" in df.columns else ["All"]
+    owner = c1.selectbox("Owner", owners, key=f"{key_prefix}_owner")
+    unit = c2.selectbox("Business unit", units, key=f"{key_prefix}_unit")
+    inherent = c3.selectbox("Overall inherent risk", ["All"] + RISK_LEVELS, key=f"{key_prefix}_inherent")
+    residual = c4.selectbox("Overall residual risk", ["All"] + RISK_LEVELS, key=f"{key_prefix}_residual")
+    c5, c6 = st.columns(2)
+    lifecycle = c5.selectbox("Lifecycle status", ["All"] + LIFECYCLE_STATUSES, key=f"{key_prefix}_lifecycle")
+    output_mapping = c6.text_input("BCBS 239 output mapping contains", key=f"{key_prefix}_output")
+    return {
+        "owner": owner,
+        "business_unit": unit,
+        "inherent_risk": inherent,
+        "residual_risk": residual,
+        "lifecycle_status": lifecycle,
+        "output_mapping": output_mapping,
+    }
+
+
 def page_reports() -> None:
     st.title("Reports & KPIs")
     username, role = current_user()
     if role not in REPORTS_ACCESS_ROLES:
         st.warning("Reports & KPIs are restricted to GCC, Data Validation Unit, and Group IT Governance Administrator users.")
         return
-    df = svc.all_eucs()
-    c1, c2, c3, c4 = st.columns(4)
-    owner = c1.selectbox("Owner", ["All"] + sorted(df["owner"].dropna().unique().tolist()) if not df.empty else ["All"])
-    unit = c2.selectbox("Business unit", ["All"] + sorted(df["business_unit"].dropna().unique().tolist()) if not df.empty else ["All"])
-    risk = c3.selectbox("Risk level", ["All"] + RISK_LEVELS)
-    status = c4.selectbox("Status", ["All"] + LIFECYCLE_STATUSES)
-    c5, c6, c7 = st.columns(3)
-    due_before_enabled = c5.checkbox("Filter by task due date")
-    due_before = c6.date_input("Due on/before", value=date.today() + timedelta(days=30), disabled=not due_before_enabled)
-    output_mapping = c7.text_input("Output mapping contains")
-    control_area = st.selectbox("Control area", ["All"] + CONTROL_AREAS)
-    report = svc.report_table({"owner": owner, "business_unit": unit, "risk_level": risk, "status": status, "due_before": due_before.isoformat() if due_before_enabled else None, "output_mapping": output_mapping, "control_area": control_area})
-    safe_df(report, height=460)
-    csv_download(report, "euc_governance_report.csv")
+
+    st.caption(
+        "Policy-ready MI pack based on the EUC Policy: inventory coverage and risk distribution, BCBS 239 output coverage, "
+        "Library/CACRT KPIs, incidents, exceptions, remediation and industrialization pipeline. Custom reports can be saved below."
+    )
+    euc_df = svc.all_eucs()
+    filters = _reports_filter_controls(euc_df, "policy_reports")
+
+    tabs = st.tabs(["Policy KPI dashboard", "Policy report pack", "Custom reports"])
+
+    with tabs[0]:
+        st.subheader("Policy KPI dashboard")
+        kpis = svc.policy_kpi_cards(filters)
+        metric_items = list(kpis.items())
+        for row_start in range(0, len(metric_items), 4):
+            cols = st.columns(4)
+            for col, (label, value) in zip(cols, metric_items[row_start:row_start + 4]):
+                suffix = "%" if label.endswith("%") else ""
+                col.metric(label, f"{value}{suffix}" if suffix else value)
+
+        charts = svc.policy_report_charts(filters)
+        c1, c2 = st.columns(2)
+        if not charts["inherent_risk"].empty:
+            c1.plotly_chart(px.bar(charts["inherent_risk"], x="risk_level", y="count", title="Overall inherent risk distribution"), use_container_width=True)
+        if not charts["residual_risk"].empty:
+            c2.plotly_chart(px.bar(charts["residual_risk"], x="risk_level", y="count", title="Overall residual risk distribution"), use_container_width=True)
+        c3, c4 = st.columns(2)
+        if not charts["lifecycle"].empty:
+            c3.plotly_chart(px.bar(charts["lifecycle"], x="lifecycle_status", y="count", title="Lifecycle distribution"), use_container_width=True)
+        if not charts["business_unit"].empty:
+            c4.plotly_chart(px.bar(charts["business_unit"], x="business_unit", y="count", title="Area / business-unit segments"), use_container_width=True)
+
+        st.markdown("#### Source report definitions")
+        safe_df(pd.DataFrame(svc.policy_report_catalog()), height=320)
+
+    with tabs[1]:
+        st.subheader("Policy report pack")
+        catalog = svc.policy_report_catalog()
+        labels = {f"{item['name']}": item["key"] for item in catalog}
+        selected_name = st.selectbox("Prepared policy report", list(labels.keys()))
+        selected_key = labels[selected_name]
+        meta = next(item for item in catalog if item["key"] == selected_key)
+        st.info(meta["description"])
+        st.caption(meta["policy_basis"])
+        report_df = svc.run_policy_report(selected_key, filters)
+        safe_df(report_df, height=520)
+        csv_download(report_df, f"{selected_key}.csv")
+
+    with tabs[2]:
+        st.subheader("Custom reports")
+        st.caption("Create reusable reports without writing SQL. Reports use approved app datasets and are visible to the Reports & KPIs roles.")
+        existing = svc.custom_report_definitions_table(active_only=False)
+        if not existing.empty:
+            st.markdown("#### Saved custom reports")
+            safe_df(existing, height=260)
+            active_existing = existing[existing["active_flag"].astype(bool)] if "active_flag" in existing.columns else existing
+            if not active_existing.empty:
+                labels = {f"{row['report_name']} — {row['dataset']}": int(row["report_id"]) for _, row in active_existing.iterrows()}
+                selected = st.selectbox("Run saved report", list(labels.keys()))
+                if st.button("Run selected custom report"):
+                    custom_df = svc.run_custom_report_definition(labels[selected])
+                    st.session_state["last_custom_report_df"] = custom_df
+                    st.session_state["last_custom_report_name"] = selected
+                if "last_custom_report_df" in st.session_state:
+                    st.markdown(f"#### Result: {st.session_state.get('last_custom_report_name', 'Custom report')}")
+                    result = st.session_state["last_custom_report_df"]
+                    safe_df(result, height=440)
+                    csv_download(result, "custom_report.csv")
+
+        st.markdown("#### Create or update a custom report")
+        dataset = st.selectbox("Dataset", svc.custom_report_dataset_names(), key="custom_report_dataset")
+        available_cols = svc.custom_report_dataset_columns(dataset)
+        default_cols = available_cols[: min(10, len(available_cols))]
+        with st.form("custom_report_builder"):
+            c1, c2 = st.columns(2)
+            report_name = c1.text_input("Report name *")
+            active_flag = c2.checkbox("Active", value=True)
+            description = st.text_area("Description")
+            selected_columns = st.multiselect("Columns", available_cols, default=default_cols)
+            st.markdown("##### Optional filters")
+            filter_cols = st.multiselect("Filter columns", available_cols, help="For text filters, rows are retained when the cell contains the entered value.")
+            filters_json: dict[str, str] = {}
+            for col in filter_cols[:8]:
+                filters_json[col] = st.text_input(f"Filter value for {col}")
+            save_custom = st.form_submit_button("Save custom report", type="primary")
+            if save_custom:
+                if not report_name.strip():
+                    st.error("Report name is required.")
+                else:
+                    svc.upsert_custom_report_definition(
+                        {
+                            "report_name": report_name.strip(),
+                            "description": description.strip(),
+                            "dataset": dataset,
+                            "selected_columns": selected_columns,
+                            "filters": filters_json,
+                            "active_flag": active_flag,
+                        },
+                        username,
+                    )
+                    st.success("Custom report saved.")
+                    rerun()
 
 
 def page_admin() -> None:

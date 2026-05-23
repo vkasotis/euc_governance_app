@@ -75,12 +75,12 @@ The login is a demo scaffold only. It is isolated in the Streamlit session-state
 - BCBS 239 output mapping requirement
 - `Not Applicable` mapping justification check
 - Multiple components/assets for one logical EUC
-- Risk assessment scoring and full history
-- Automatic risk and residual risk update on assessment submission
-- Evidence upload to local `/uploads` storage
-- Evidence metadata: document type, requirement, control area, CACRT dimension, lifecycle stage, risk applicability, version, and status
+- Excel-aligned risk assessment with BCBS 239 materiality override, dimension-level inherent/residual risk, baseline controls, review status, and governed amendment workflow
+- Automatic risk and residual risk update on assessment submission and reviewer acceptance
+- Evidence upload to local `/uploads` storage with multi-file and multi-artifact-type support
+- Simplified evidence upload with reviewer-driven status; required artifact guidance explains what to upload
 - GCC/Data Validation evidence review with accept/reject/comment/deficiency tagging
-- Required artifact checklist based on residual risk
+- Required artifact checklist based on Overall Inherent Risk / BCBS 239 materiality baseline, with residual risk used for remediation/escalation
 - Automatic follow-up tasks for missing/rejected/expired mandatory artifacts
 - Data Validation review queue and independent reviewer check
 - Findings with automatic remediation task creation
@@ -88,33 +88,34 @@ The login is a demo scaffold only. It is isolated in the Streamlit session-state
 - Incident creation with reassessment and documentation refresh task generation
 - Material change capture with reassessment and documentation refresh triggers
 - Industrialization candidate and controlled decommissioning flow
-- Dashboard cards, charts, reporting filters, and CSV export
+- Dashboard cards, charts, policy-ready MI/KPI report pack, custom report builder, and CSV export
 - Immutable audit trail viewer from the UI
 - Admin reference data and required artifact rule management, including maker-checker comment fields
 
-## Risk scoring rule
+## Risk assessment model
 
-The MVP applies the configurable scoring convention implemented in `services.py`:
+The MVP uses the Excel-aligned EUC Risk Assessment model implemented in `services.py`:
 
-- Average score 1.0-1.9 = Low
-- Average score 2.0-2.9 = Medium
-- Average score 3.0-3.9 = High
-- Average score 4.0-5.0 = Very High
-
-Inherent risk is calculated from integrity/accuracy, timeliness/availability, complexity, and business criticality. Residual risk includes the control effectiveness score as the fifth score.
+- BCBS 239 materiality questions determine whether the elevated-inherent-risk treatment applies.
+- The EUC Owner selects owner inherent risk for Integrity / Accuracy and Timeliness / Availability from Low, Medium, or High.
+- If any BCBS 239 materiality question is Yes, effective inherent risk for both dimensions is Very High.
+- Eight baseline controls are assessed, with guidance shown in the UI.
+- Control effectiveness is derived separately by dimension.
+- Residual risk is calculated through the policy matrix and cannot fall below Medium for BCBS-material EUCs.
+- New risk assessments are Submitted until accepted/rejected by GCC or Data Validation. Amendments require an approved edit request.
 
 ## Required artifact logic
 
-Default mandatory evidence rules:
+Default mandatory evidence rules are driven by Overall Inherent Risk / BCBS 239 materiality baseline, not by residual risk. Residual risk drives remediation, escalation, and exception governance.
 
-| Residual risk | Required artifacts |
+| Overall inherent-risk baseline | Required artifacts |
 |---|---|
 | Low | Risk Assessment, Operating Procedure |
-| Medium | Risk Assessment, Operating Procedure, Library of Controls, Review Evidence |
-| High | Risk Assessment, Operating Procedure, Library of Controls, Testing Evidence, Reconciliation Evidence, Review Evidence |
-| Very High | Risk Assessment, Operating Procedure, Library of Controls, Testing Evidence, Reconciliation Evidence, Resilience Evidence, Review Evidence, Approval Evidence |
+| Medium | Risk Assessment, Operating Procedure, Versioning / Change Log Evidence, Control Evidence, Review Evidence |
+| High | Risk Assessment, Operating Procedure, Library of Controls, Versioning / Change Log Evidence, Testing Evidence, Reconciliation Evidence, Review Evidence, Access Review Evidence, Resilience Evidence |
+| Very High | Risk Assessment, Operating Procedure, Library of Controls, Versioning / Change Log Evidence, Design / Logic Evidence, Testing Evidence, UAT Evidence, Reconciliation Evidence, Resilience Evidence, Review Evidence, Approval Evidence, Access Review Evidence, Evidence Pack Index |
 
-These rules are inserted into the `required_artifact_rules` table and can be extended from Admin Configuration.
+Additional event-driven overlays are added for SPOF, incidents, material changes, exceptions, industrialization, and decommissioning. These rules are inserted into the `required_artifact_rules` table and can be extended from Admin Configuration.
 
 ## Local run
 
@@ -128,9 +129,9 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-On first run, the app initializes the SQLite schema, reference data, a demo portfolio, and local upload folders automatically if no EUC records exist.
+On first run, the app initializes the SQLite schema, reference/configuration data, and local upload folders. It does not automatically seed EUC operational/demo data.
 
-You can also seed manually:
+You can seed demo EUC data manually from Admin Configuration -> Seed/reset demo, or from the command line:
 
 ```bash
 python seed_data.py
@@ -187,7 +188,7 @@ rm -rf uploads/euc_*
 streamlit run app.py
 ```
 
-The app will recreate seed data on next launch.
+The app will recreate schema/reference data on next launch. Demo EUC data is not recreated automatically; load it explicitly from Admin Configuration or `python seed_data.py`.
 
 ## Patch 28 updates
 
@@ -196,3 +197,10 @@ The app will recreate seed data on next launch.
 - Risk assessments can now be amended in place only through a governed workflow: the EUC Owner/Delegate requests an amendment, GCC or Data Validation approves/rejects the request, and an approved amendment resets the assessment to Submitted for renewed review.
 - Group IT Governance Administrator is treated as a platform/configuration administrator: it can maintain configuration and perform administrative reset activities, but it cannot register/edit EUC registry content or create/review/amend risk assessments.
 - The Evidence & sign-off baseline control is preserved exactly as selected by the user. Only the Registration & Risk Assessment control is subject to the special system cap pending accepted risk assessment and registration/mapping completeness.
+
+## Patch 30 updates
+
+- Reports & KPIs now includes a policy-ready MI/KPI pack aligned to the EUC Policy, including inventory coverage and risk profile, EUC-to-BCBS 239 output coverage, inventory completeness/quality, Library of Controls KPIs, CACRT coverage, incident resolution, exception ageing, remediation/findings pipeline, industrialization/decommissioning pipeline, and overdue reviews.
+- Added KPI cards for total EUCs, BCBS mapping, documentation completeness, High/Very High inherent/residual risk, overdue reviews, incidents, exceptions, remediation, industrialization, Library of Controls coverage, and operationalization documentation coverage.
+- Added a Custom Reports tab allowing authorized reporting users to create reusable reports from approved datasets without SQL.
+- Added the `custom_report_definitions` table and lightweight migration support for older SQLite databases.
