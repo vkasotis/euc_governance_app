@@ -74,6 +74,8 @@ AUDIT_ACCESS_ROLES = {svc.GCC_ROLE}
 
 def can_access_page(page: str, role: str) -> bool:
     """Central page-access guard for role-sensitive navigation items."""
+    if page == "Register New EUC":
+        return role in {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE}
     if page == "Reports & KPIs":
         return role in REPORTS_ACCESS_ROLES
     if page == "Email Notifications":
@@ -90,10 +92,9 @@ def navigation_for_role(role: str) -> list[str]:
 
 def bootstrap() -> None:
     init_db()
-    # Initialize reference/configuration feeds only once for a fresh database.
-    # Existing configuration and EUC operational data are left unchanged on
-    # Streamlit restarts/redeploys. Demo EUCs are never auto-seeded here.
-    svc.initialize_reference_data_once("system")
+    svc.initialize_reference_data("system")
+    # Do not auto-seed EUC operational data on startup. Demo data can be
+    # loaded explicitly from Admin Configuration -> Seed/reset demo.
 
 
 def rerun() -> None:
@@ -393,6 +394,121 @@ def assessment_review_card(assessment: dict[str, Any]) -> None:
     )
 
 
+
+def risk_assessment_input_form(
+    form_key: str,
+    euc: dict[str, Any],
+    username: str,
+    defaults: dict[str, Any] | None = None,
+    submit_label: str = "Submit assessment",
+) -> dict[str, Any] | None:
+    """Render the Excel-aligned risk-assessment form and return a payload on submit."""
+    defaults = defaults or {}
+    with st.form(form_key):
+        st.markdown("#### BCBS 239 materiality assessment")
+        m1 = st.selectbox(
+            "Failure/error could make a BCBS 239 in-scope output materially inaccurate, incomplete, delayed, or unavailable",
+            ["No", "Yes"],
+            index=option_index(["No", "Yes"], defaults.get("materiality_q1") or "No"),
+            key=f"{form_key}_m1",
+        )
+        m2 = st.selectbox(
+            "EUC is a key control point that can trigger correction, rejection, restatement, escalation, or delayed issuance",
+            ["No", "Yes"],
+            index=option_index(["No", "Yes"], defaults.get("materiality_q2") or "No"),
+            key=f"{form_key}_m2",
+        )
+        m3 = st.selectbox(
+            "EUC is a single point of failure in a critical reporting/risk process",
+            ["No", "Yes"],
+            index=option_index(["No", "Yes"], defaults.get("materiality_q3") or "No"),
+            key=f"{form_key}_m3",
+        )
+
+        st.markdown("#### Owner-entered inherent risk")
+        c1, c2, c3 = st.columns(3)
+        owner_integrity = c1.selectbox(
+            "Owner Integrity / Accuracy inherent risk",
+            svc.OWNER_INHERENT_LEVELS,
+            index=option_index(svc.OWNER_INHERENT_LEVELS, defaults.get("owner_integrity_inherent") or "Medium"),
+            key=f"{form_key}_owner_integrity",
+        )
+        owner_timeliness = c2.selectbox(
+            "Owner Timeliness / Availability inherent risk",
+            svc.OWNER_INHERENT_LEVELS,
+            index=option_index(svc.OWNER_INHERENT_LEVELS, defaults.get("owner_timeliness_inherent") or "Medium"),
+            key=f"{form_key}_owner_timeliness",
+        )
+        trigger_options = ["Periodic", "Material Change", "Incident-triggered", "Initial Registration", "Manual / Ad hoc"]
+        trigger = c3.selectbox(
+            "Assessment type",
+            trigger_options,
+            index=option_index(trigger_options, defaults.get("trigger_type") or "Periodic"),
+            key=f"{form_key}_trigger",
+        )
+
+        st.markdown("#### Baseline controls")
+        readiness = svc.registration_control_readiness(int(euc["euc_id"]))
+        missing_text = ", ".join(readiness["missing_items"]) if readiness["missing_items"] else "None"
+        st.info(
+            "Registration & Risk Assessment readiness: "
+            f"registration complete = {readiness['registration_complete']}; "
+            f"accepted risk assessment exists = {readiness['accepted_risk_assessment']}; "
+            f"maximum effective status now = {readiness['allowed_status']}; "
+            f"missing items = {missing_text}."
+        )
+
+        def control_selector(container, label: str, key: str, options: list[str], default: str | None) -> str:
+            container.caption(svc.BASELINE_CONTROL_GUIDANCE[key])
+            return container.selectbox(
+                label,
+                options,
+                index=option_index(options, default or "Partially in place"),
+                help=svc.BASELINE_CONTROL_GUIDANCE[key],
+                key=f"{form_key}_{key}",
+            )
+
+        a, b = st.columns(2)
+        ctrl_1 = control_selector(a, "1. Registration & risk assessment", "registration_risk_assessment", svc.CONTROL_STATUS_CORE, defaults.get("control_registration_risk_assessment"))
+        if svc.CONTROL_STATUS_RANK.get(ctrl_1, 1) > svc.CONTROL_STATUS_RANK.get(readiness["allowed_status"], 1):
+            st.warning(
+                "For this submission, Registration & Risk Assessment will be treated as "
+                f"{readiness['allowed_status']} for the calculation until registration/mapping is complete and the risk assessment is Accepted by an independent reviewer."
+            )
+        ctrl_2 = control_selector(b, "2. Privileged Access", "privileged_access", svc.CONTROL_STATUS_CORE, defaults.get("control_privileged_access"))
+        ctrl_3 = control_selector(a, "3. Versioning & change log", "versioning_change_log", svc.CONTROL_STATUS_CORE, defaults.get("control_versioning_change_log"))
+        ctrl_4 = control_selector(b, "4. Checks & reconciliations", "checks_reconciliations", svc.CONTROL_STATUS_CORE, defaults.get("control_checks_reconciliations"))
+        ctrl_5 = control_selector(a, "5. EUC Library of Controls / CACRT", "library_controls_cacrt", svc.CONTROL_STATUS_WITH_NA, defaults.get("control_library_controls_cacrt"))
+        ctrl_6 = control_selector(b, "6. Operating Procedure", "operating_procedure", svc.CONTROL_STATUS_CORE, defaults.get("control_operating_procedure"))
+        ctrl_7 = control_selector(a, "7. Evidence & sign-off", "evidence_signoff", svc.CONTROL_STATUS_WITH_NA, defaults.get("control_evidence_signoff"))
+        ctrl_8 = control_selector(b, "8. Resilience", "resilience", svc.CONTROL_STATUS_CORE, defaults.get("control_resilience"))
+
+        rationale = st.text_area("Rationale / comments", value=defaults.get("rationale") or "", key=f"{form_key}_rationale")
+        submitted = st.form_submit_button(submit_label, type="primary")
+        if not submitted:
+            return None
+        return {
+            "euc_id": euc["euc_id"],
+            "assessment_date": date.today().isoformat(),
+            "assessed_by": username,
+            "materiality_q1": m1,
+            "materiality_q2": m2,
+            "materiality_q3": m3,
+            "owner_integrity_inherent": owner_integrity,
+            "owner_timeliness_inherent": owner_timeliness,
+            "control_registration_risk_assessment": ctrl_1,
+            "control_privileged_access": ctrl_2,
+            "control_versioning_change_log": ctrl_3,
+            "control_checks_reconciliations": ctrl_4,
+            "control_library_controls_cacrt": ctrl_5,
+            "control_operating_procedure": ctrl_6,
+            "control_evidence_signoff": ctrl_7,
+            "control_resilience": ctrl_8,
+            "trigger_type": trigger,
+            "rationale": rationale,
+        }
+
+
 def selected_euc_id() -> int | None:
     value = st.session_state.get("selected_euc_id")
     return int(value) if value else None
@@ -523,8 +639,8 @@ def page_inventory() -> None:
 def page_register() -> None:
     st.title("Register New EUC")
     username, role = current_user()
-    if role not in {svc.OWNER_ROLE, svc.ADMIN_ROLE, svc.CONTRIBUTOR_ROLE}:
-        st.warning("Registration is restricted to EUC Owners, Contributors, and Administrators in this MVP.")
+    if role not in {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE}:
+        st.warning("Registration is restricted to EUC Owners and delegated contributors. Group IT Governance Administrator manages the platform/configuration, not EUC registry content.")
         return
     if not require_write_access():
         return
@@ -713,7 +829,7 @@ def page_components() -> None:
     st.subheader(f"EUC Asset Inventory for {euc['reference_id']}")
     safe_df(components, height=350)
 
-    can_edit = svc.can_edit_euc(role, username, euc) or role in {svc.GCC_ROLE, svc.ADMIN_ROLE}
+    can_edit = svc.can_edit_euc(role, username, euc) or role == svc.GCC_ROLE
     if not can_edit:
         st.info("You can view components but cannot add or edit components for this EUC in the current role.")
         return
@@ -802,6 +918,9 @@ def page_risk_assessment() -> None:
     assessments = svc.get_risk_assessments(euc["euc_id"])
     safe_df(assessments, height=260)
 
+    can_owner_edit = svc.can_edit_euc(role, username, euc)
+    can_assessment_review = svc.risk_assessment_edit_can_be_approved_by(role)
+
     if not assessments.empty:
         with st.expander("Open completed assessment for review", expanded=False):
             assessment_map = {
@@ -811,9 +930,9 @@ def page_risk_assessment() -> None:
             chosen = st.selectbox("Completed assessment", list(assessment_map.keys()), key="risk_review_select")
             selected = assessments[assessments["assessment_id"] == assessment_map[chosen]].iloc[0].to_dict()
             assessment_review_card(selected)
-            st.info("Completed assessments are retained as history. To amend a completed assessment, submit a new version below.")
+            st.info("Completed assessments can be amended in place only after GCC or Data Validation approves an edit request. Otherwise, submit a new assessment version for a new trigger/event.")
 
-        if svc.can_review(role) and require_write_access():
+        if can_assessment_review and require_write_access():
             with st.expander("Reviewer decision", expanded=False):
                 review_map = {
                     f"#{row['assessment_id']} — version {row['version']} — {row.get('status', 'Submitted')}": int(row["assessment_id"])
@@ -833,92 +952,85 @@ def page_risk_assessment() -> None:
                         st.success("Risk assessment review status updated.")
                         rerun()
 
-    if not svc.can_edit_euc(role, username, euc) and role not in {svc.ADMIN_ROLE, svc.GCC_ROLE}:
-        st.warning("Only the EUC owner/delegate or governance roles can record assessments.")
+        st.subheader("Risk assessment amendment workflow")
+        if can_owner_edit and require_write_access():
+            request_map = {
+                f"#{row['assessment_id']} — version {row['version']} — edit request: {row.get('edit_request_status') or 'Not Requested'}": int(row["assessment_id"])
+                for _, row in assessments.iterrows()
+            }
+            chosen_request = st.selectbox("Assessment to amend", list(request_map.keys()), key="risk_edit_request_select")
+            selected_request = assessments[assessments["assessment_id"] == request_map[chosen_request]].iloc[0].to_dict()
+            current_request_status = selected_request.get("edit_request_status") or "Not Requested"
+            st.caption(f"Current edit-request status: **{current_request_status}**")
+            if current_request_status != "Approved":
+                with st.form("request_assessment_edit"):
+                    reason = st.text_area("Why is an amendment needed?", value=selected_request.get("edit_request_reason") or "")
+                    if st.form_submit_button("Request edit approval"):
+                        if not reason.strip():
+                            st.error("Provide the reason for the amendment request.")
+                        else:
+                            svc.request_risk_assessment_edit(request_map[chosen_request], reason.strip(), username)
+                            st.success("Edit request submitted to GCC / Data Validation.")
+                            rerun()
+            else:
+                st.info("The edit request is approved. You can amend this assessment in place below. Saving will reset the assessment status to Submitted for review.")
+                edit_payload = risk_assessment_input_form(
+                    "edit_risk_assessment_in_place",
+                    euc,
+                    username,
+                    defaults=selected_request,
+                    submit_label="Save amendment and resubmit",
+                )
+                if edit_payload:
+                    svc.update_risk_assessment_in_place(request_map[chosen_request], edit_payload, username)
+                    st.success("Risk assessment amended in place and resubmitted for review.")
+                    rerun()
+        elif can_assessment_review and require_write_access():
+            pending = assessments[assessments.get("edit_request_status", pd.Series(dtype=str)).fillna("Not Requested") == "Pending"]
+            if pending.empty:
+                st.info("No risk assessment edit requests are pending.")
+            else:
+                decision_map = {
+                    f"#{row['assessment_id']} — version {row['version']} — requested by {row.get('edit_requested_by') or '-'}": int(row["assessment_id"])
+                    for _, row in pending.iterrows()
+                }
+                chosen_decision = st.selectbox("Pending edit request", list(decision_map.keys()), key="risk_edit_decision_select")
+                selected_pending = pending[pending["assessment_id"] == decision_map[chosen_decision]].iloc[0].to_dict()
+                record_table(
+                    selected_pending,
+                    [
+                        ("Requested by", "edit_requested_by"),
+                        ("Requested at", "edit_requested_at"),
+                        ("Reason", "edit_request_reason"),
+                    ],
+                    title="Request details",
+                )
+                with st.form("decide_assessment_edit"):
+                    decision = st.selectbox("Decision", ["Approved", "Rejected"])
+                    comments = st.text_area("Decision comments")
+                    if st.form_submit_button("Save edit-request decision"):
+                        svc.decide_risk_assessment_edit_request(decision_map[chosen_decision], decision, comments, username)
+                        st.success("Risk assessment edit-request decision saved.")
+                        rerun()
+
+    if role == svc.ADMIN_ROLE:
+        st.info("Group IT Governance Administrator can configure the platform, but does not create, amend, approve, or reject EUC risk assessments.")
+        return
+
+    if not can_owner_edit:
+        st.warning("Only the EUC Owner or delegated contributor can submit a risk assessment. GCC and Data Validation review or approve amendment requests.")
         return
 
     st.subheader("Submit new risk assessment version")
-    with st.form("risk_assessment_excel"):
-        st.markdown("#### BCBS 239 materiality assessment")
-        m1 = st.selectbox(
-            "Failure/error could make a BCBS 239 in-scope output materially inaccurate, incomplete, delayed, or unavailable",
-            ["No", "Yes"],
-        )
-        m2 = st.selectbox(
-            "EUC is a key control point that can trigger correction, rejection, restatement, escalation, or delayed issuance",
-            ["No", "Yes"],
-        )
-        m3 = st.selectbox(
-            "EUC is a single point of failure in a critical reporting/risk process",
-            ["No", "Yes"],
-        )
-
-        st.markdown("#### Owner-entered inherent risk")
-        c1, c2, c3 = st.columns(3)
-        owner_integrity = c1.selectbox("Owner Integrity / Accuracy inherent risk", svc.OWNER_INHERENT_LEVELS, index=1)
-        owner_timeliness = c2.selectbox("Owner Timeliness / Availability inherent risk", svc.OWNER_INHERENT_LEVELS, index=1)
-        trigger = c3.selectbox("Assessment type", ["Periodic", "Material Change", "Incident-triggered", "Initial Registration", "Manual / Ad hoc"])
-
-        st.markdown("#### Baseline controls")
-        readiness = svc.registration_control_readiness(int(euc["euc_id"]))
-        missing_text = ", ".join(readiness["missing_items"]) if readiness["missing_items"] else "None"
-        st.info(
-            "Registration & Risk Assessment readiness: "
-            f"registration complete = {readiness['registration_complete']}; "
-            f"accepted risk assessment exists = {readiness['accepted_risk_assessment']}; "
-            f"maximum effective status now = {readiness['allowed_status']}; "
-            f"missing items = {missing_text}."
-        )
-
-        def control_selector(container, label: str, key: str, options: list[str]) -> str:
-            container.caption(svc.BASELINE_CONTROL_GUIDANCE[key])
-            return container.selectbox(label, options, index=1, help=svc.BASELINE_CONTROL_GUIDANCE[key])
-
-        a, b = st.columns(2)
-        ctrl_1 = control_selector(a, "1. Registration & risk assessment", "registration_risk_assessment", svc.CONTROL_STATUS_CORE)
-        if svc.CONTROL_STATUS_RANK.get(ctrl_1, 1) > svc.CONTROL_STATUS_RANK.get(readiness["allowed_status"], 1):
-            st.warning(
-                "For this submission, Registration & Risk Assessment will be treated as "
-                f"{readiness['allowed_status']} for the calculation until registration/mapping is complete and the risk assessment is Accepted by an independent reviewer."
-            )
-        ctrl_2 = control_selector(b, "2. Privileged Access", "privileged_access", svc.CONTROL_STATUS_CORE)
-        ctrl_3 = control_selector(a, "3. Versioning & change log", "versioning_change_log", svc.CONTROL_STATUS_CORE)
-        ctrl_4 = control_selector(b, "4. Checks & reconciliations", "checks_reconciliations", svc.CONTROL_STATUS_CORE)
-        ctrl_5 = control_selector(a, "5. EUC Library of Controls / CACRT", "library_controls_cacrt", svc.CONTROL_STATUS_WITH_NA)
-        ctrl_6 = control_selector(b, "6. Operating Procedure", "operating_procedure", svc.CONTROL_STATUS_CORE)
-        ctrl_7 = control_selector(a, "7. Evidence & sign-off", "evidence_signoff", svc.CONTROL_STATUS_WITH_NA)
-        ctrl_8 = control_selector(b, "8. Resilience", "resilience", svc.CONTROL_STATUS_CORE)
-
-        rationale = st.text_area("Rationale / comments")
-        submitted = st.form_submit_button("Submit assessment", type="primary")
-        if submitted:
-            payload = {
-                "euc_id": euc["euc_id"],
-                "assessment_date": date.today().isoformat(),
-                "assessed_by": username,
-                "materiality_q1": m1,
-                "materiality_q2": m2,
-                "materiality_q3": m3,
-                "owner_integrity_inherent": owner_integrity,
-                "owner_timeliness_inherent": owner_timeliness,
-                "control_registration_risk_assessment": ctrl_1,
-                "control_privileged_access": ctrl_2,
-                "control_versioning_change_log": ctrl_3,
-                "control_checks_reconciliations": ctrl_4,
-                "control_library_controls_cacrt": ctrl_5,
-                "control_operating_procedure": ctrl_6,
-                "control_evidence_signoff": ctrl_7,
-                "control_resilience": ctrl_8,
-                "trigger_type": trigger,
-                "rationale": rationale,
-            }
-            calculated = svc.calculate_excel_risk_assessment(payload)
-            payload["status"] = "Submitted"
-            assessment_id = svc.create_risk_assessment(payload, username)
-            st.success(f"Assessment {assessment_id} submitted for review. Overall inherent risk: {calculated['overall_inherent_risk']}; overall residual risk: {calculated['overall_residual_risk']}.")
-            st.info(calculated["required_action"])
-            rerun()
-
+    st.caption("Use this for onboarding, periodic review, incident-triggered reassessment, or material-change reassessment. To correct an existing assessment, use the amendment workflow above after approval.")
+    payload = risk_assessment_input_form("risk_assessment_excel", euc, username, defaults=None, submit_label="Submit new assessment version")
+    if payload:
+        calculated = svc.calculate_excel_risk_assessment(payload)
+        payload["status"] = "Submitted"
+        assessment_id = svc.create_risk_assessment(payload, username)
+        st.success(f"Assessment {assessment_id} submitted for review. Overall inherent risk: {calculated['overall_inherent_risk']}; overall residual risk: {calculated['overall_residual_risk']}.")
+        st.info(calculated["required_action"])
+        rerun()
 
 def page_documents() -> None:
     st.title("Documents & Evidence Pack")
@@ -976,40 +1088,55 @@ def page_documents() -> None:
     with col_upload:
         st.subheader("Upload evidence")
         if svc.can_upload_evidence(role, username, euc) and require_write_access():
-            # Keep document type outside the form so Streamlit reruns immediately
-            # when the user changes it and the guidance text stays in sync.
-            document_type = st.selectbox(
-                "Document type",
+            selected_types = st.multiselect(
+                "Document type(s) covered by the upload",
                 uploadable_document_types,
-                key=f"upload_document_type_{euc['euc_id']}",
+                default=[],
+                help="Select one or more artifact types. A single uploaded file may cover multiple required artifact types; multiple files may also be uploaded for the same type.",
             )
-            st.info(svc.artifact_upload_guidance(document_type))
-            uploaded = st.file_uploader("Upload document / evidence", key=f"upload_file_{euc['euc_id']}")
+            if selected_types:
+                for doc_type in selected_types:
+                    with st.expander(f"What to upload for {doc_type}", expanded=len(selected_types) == 1):
+                        st.info(svc.artifact_upload_guidance(doc_type))
+            else:
+                st.info("Select at least one document type to see what evidence is expected.")
+
+            uploaded_files = st.file_uploader(
+                "Upload one or more document / evidence files",
+                accept_multiple_files=True,
+                help="You may upload multiple documents for the same type. If one file covers several evidence types, select all applicable types above.",
+            )
             with st.form("doc_metadata"):
                 comments = st.text_area("Comments")
                 if st.form_submit_button("Save uploaded evidence"):
-                    if uploaded is None:
-                        st.error("Select a file before saving metadata.")
+                    if not uploaded_files:
+                        st.error("Select at least one file before saving evidence.")
+                    elif not selected_types:
+                        st.error("Select at least one document type covered by the uploaded file(s).")
                     else:
-                        file_name, file_path = svc.save_document_file(euc["euc_id"], uploaded.name, uploaded.getvalue())
-                        doc_id = svc.create_document_record(
-                            {
-                                "euc_id": euc["euc_id"],
-                                "file_name": file_name,
-                                "file_path": file_path,
-                                "document_type": document_type,
-                                "requirement": None,
-                                "control_area": None,
-                                "cacrt_dimension": None,
-                                "risk_applicability": None,
-                                "lifecycle_stage": None,
-                                "version": None,
-                                "status": "Submitted",
-                                "comments": comments,
-                            },
-                            username,
-                        )
-                        st.success(f"Evidence uploaded as document {doc_id}. Status set to Submitted.")
+                        created_ids: list[int] = []
+                        for uploaded in uploaded_files:
+                            file_name, file_path = svc.save_document_file(euc["euc_id"], uploaded.name, uploaded.getvalue())
+                            for document_type in selected_types:
+                                doc_id = svc.create_document_record(
+                                    {
+                                        "euc_id": euc["euc_id"],
+                                        "file_name": file_name,
+                                        "file_path": file_path,
+                                        "document_type": document_type,
+                                        "requirement": None,
+                                        "control_area": None,
+                                        "cacrt_dimension": None,
+                                        "risk_applicability": None,
+                                        "lifecycle_stage": None,
+                                        "version": None,
+                                        "status": "Submitted",
+                                        "comments": comments,
+                                    },
+                                    username,
+                                )
+                                created_ids.append(doc_id)
+                        st.success(f"Evidence uploaded. Created {len(created_ids)} evidence record(s): {', '.join(map(str, created_ids))}.")
                         rerun()
         else:
             st.info("Upload is disabled for the current role/EUC relationship.")

@@ -591,6 +591,15 @@ CREATE_TABLES_SQL = [
         reviewed_by TEXT,
         reviewed_at TEXT,
         review_comments TEXT,
+        edit_request_status TEXT DEFAULT 'Not Requested',
+        edit_requested_by TEXT,
+        edit_requested_at TEXT,
+        edit_request_reason TEXT,
+        edit_approved_by TEXT,
+        edit_approved_at TEXT,
+        edit_approval_comments TEXT,
+        last_edited_by TEXT,
+        last_edited_at TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (euc_id) REFERENCES eucs(euc_id)
     );
@@ -769,14 +778,6 @@ CREATE_TABLES_SQL = [
         active_flag INTEGER NOT NULL DEFAULT 1,
         maker_checker_comments TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS app_settings (
-        setting_key TEXT PRIMARY KEY,
-        setting_value TEXT,
-        updated_by TEXT,
         updated_at TEXT NOT NULL
     );
     """,

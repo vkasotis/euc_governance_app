@@ -118,63 +118,6 @@ def artifact_upload_guidance(document_type: str) -> str:
     )
 
 
-def get_app_setting(key: str) -> str | None:
-    row = fetch_one("SELECT setting_value FROM app_settings WHERE setting_key = ?", (key,))
-    return row["setting_value"] if row else None
-
-
-def set_app_setting(key: str, value: str, username: str = "system") -> None:
-    execute(
-        """
-        INSERT INTO app_settings(setting_key, setting_value, updated_by, updated_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(setting_key) DO UPDATE SET
-            setting_value = excluded.setting_value,
-            updated_by = excluded.updated_by,
-            updated_at = excluded.updated_at
-        """,
-        (key, value, username, utc_now()),
-    )
-
-
-def _safe_table_count(table_name: str) -> int:
-    try:
-        row = fetch_one(f"SELECT COUNT(*) AS n FROM {table_name}")
-        return int(row["n"] if row else 0)
-    except Exception:
-        return 0
-
-
-def initialize_reference_data_once(username: str = "system") -> None:
-    """Initialize configuration/reference data only once per database.
-
-    This prevents the app from recreating seeded/configuration feeds on every
-    Streamlit restart. Existing databases that already contain configuration
-    rows are marked as initialized and left unchanged. Explicit admin actions
-    can still run seed_database() or initialize_reference_data() when needed.
-    """
-    if get_app_setting("reference_data_initialized") == "1":
-        return
-
-    has_existing_configuration = any(
-        _safe_table_count(table) > 0
-        for table in (
-            "reference_data",
-            "due_date_rules",
-            "required_artifact_rules",
-            "user_profiles",
-            "raci_rules",
-            "bcbs239_outputs",
-        )
-    )
-    if has_existing_configuration:
-        set_app_setting("reference_data_initialized", "1", username)
-        return
-
-    initialize_reference_data(username)
-    set_app_setting("reference_data_initialized", "1", username)
-
-
 def _default_email(username: str) -> str:
     """Return the default seeded demo mailbox.
 
@@ -908,18 +851,22 @@ def can_configure(role: str) -> bool:
 
 
 def can_review(role: str) -> bool:
-    return role in {GCC_ROLE, DVU_ROLE, ADMIN_ROLE}
+    # Independent review/challenge is performed by GCC or Data Validation.
+    # Group IT Governance Administrator administers the platform/configuration
+    # and must not approve or challenge EUC content/risk assessments.
+    return role in {GCC_ROLE, DVU_ROLE}
 
 
 def can_approve(role: str) -> bool:
-    return role in {APPROVER_ROLE, ADMIN_ROLE}
+    return role == APPROVER_ROLE
 
 
 def can_edit_euc(role: str, username: str, euc: dict[str, Any] | None) -> bool:
     if not euc or is_read_only(role):
         return False
-    if role == ADMIN_ROLE:
-        return True
+    # EUC registry content is owned by the EUC Owner/Delegate. Group IT
+    # Governance Administrator remains a platform/configuration administrator,
+    # not a content owner.
     if role == OWNER_ROLE and euc.get("owner") == username:
         return True
     if role == CONTRIBUTOR_ROLE and euc.get("owner_delegate") == username:
@@ -928,7 +875,9 @@ def can_edit_euc(role: str, username: str, euc: dict[str, Any] | None) -> bool:
 
 
 def can_upload_evidence(role: str, username: str, euc: dict[str, Any] | None) -> bool:
-    return can_edit_euc(role, username, euc) or role in {GCC_ROLE, DVU_ROLE, ADMIN_ROLE}
+    # Evidence is business/control content. Owners/delegates upload; GCC/DVU
+    # can add review evidence where needed. Group IT Admin does not own content.
+    return can_edit_euc(role, username, euc) or role in {GCC_ROLE, DVU_ROLE}
 
 
 def add_days(days: int) -> str:
@@ -1123,11 +1072,6 @@ def effective_registration_control_status(payload: dict[str, Any]) -> str:
     assessment_id = payload.get("assessment_id")
     include_assessment_id = int(assessment_id) if status == "Accepted" and assessment_id else None
     readiness = registration_control_readiness(int(euc_id), include_assessment_id) if euc_id else {"allowed_status": "Partially in place"}
-    # Before independent acceptance, the control is capped by readiness. Once an
-    # assessment is Accepted and registration/mapping is complete, this baseline
-    # control becomes evidenced by the accepted assessment and complete EUC record.
-    if status == "Accepted" and readiness["allowed_status"] == "In place and evidenced" and selected != "Not in place":
-        return "In place and evidenced"
     return _cap_control_status(selected, readiness["allowed_status"])
 
 
@@ -1658,7 +1602,7 @@ def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
             calculated["overall_inherent_risk"],
             calculated["overall_residual_risk"],
             calculated["required_action"],
-            calculated.get("effective_registration_risk_assessment_control", payload.get("control_registration_risk_assessment")),
+            payload.get("control_registration_risk_assessment"),
             payload.get("control_privileged_access"),
             payload.get("control_versioning_change_log"),
             payload.get("control_checks_reconciliations"),
@@ -1735,7 +1679,7 @@ def recalculate_risk_assessment(assessment_id: int, username: str = "system", wr
             materially_supports_bcbs239 = ?, effective_integrity_inherent = ?, effective_timeliness_inherent = ?,
             integrity_control_effectiveness = ?, timeliness_control_effectiveness = ?,
             integrity_residual_risk = ?, timeliness_residual_risk = ?, overall_inherent_risk = ?,
-            overall_residual_risk = ?, required_action = ?, control_registration_risk_assessment = ?
+            overall_residual_risk = ?, required_action = ?
         WHERE assessment_id = ?
         """,
         (
@@ -1755,7 +1699,6 @@ def recalculate_risk_assessment(assessment_id: int, username: str = "system", wr
             calculated["overall_inherent_risk"],
             calculated["overall_residual_risk"],
             calculated["required_action"],
-            calculated.get("effective_registration_risk_assessment_control", row.get("control_registration_risk_assessment")),
             assessment_id,
         ),
     )
@@ -1809,6 +1752,153 @@ def review_risk_assessment(assessment_id: int, status: str, comments: str, usern
             priority="High",
             username=username,
         )
+    evaluate_and_update_completeness(old["euc_id"], username, create_missing_tasks=True)
+
+
+def risk_assessment_edit_can_be_approved_by(role: str) -> bool:
+    return role in {GCC_ROLE, DVU_ROLE}
+
+
+def request_risk_assessment_edit(assessment_id: int, reason: str, username: str) -> None:
+    old = fetch_one("SELECT * FROM risk_assessments WHERE assessment_id = ?", (assessment_id,))
+    if not old:
+        raise ValueError("Risk assessment not found.")
+    if old.get("status") not in {"Submitted", "Accepted", "Rejected"}:
+        raise ValueError("Risk assessment has an invalid status.")
+    execute(
+        """
+        UPDATE risk_assessments
+        SET edit_request_status = 'Pending', edit_requested_by = ?, edit_requested_at = ?,
+            edit_request_reason = ?, edit_approved_by = NULL, edit_approved_at = NULL,
+            edit_approval_comments = NULL
+        WHERE assessment_id = ?
+        """,
+        (username, utc_now(), reason, assessment_id),
+    )
+    insert_audit("Risk Assessment", assessment_id, "EDIT_REQUEST", username, old, {"reason": reason})
+    queue_raci_notifications(
+        "RISK_ASSESSMENT_EDIT_REQUESTED",
+        "Risk Assessment",
+        assessment_id,
+        old["euc_id"],
+        username,
+        context={"Edit request reason": reason},
+    )
+
+
+def decide_risk_assessment_edit_request(assessment_id: int, decision: str, comments: str, username: str) -> None:
+    old = fetch_one("SELECT * FROM risk_assessments WHERE assessment_id = ?", (assessment_id,))
+    if not old:
+        raise ValueError("Risk assessment not found.")
+    if decision not in {"Approved", "Rejected"}:
+        raise ValueError("Invalid edit-request decision.")
+    execute(
+        """
+        UPDATE risk_assessments
+        SET edit_request_status = ?, edit_approved_by = ?, edit_approved_at = ?, edit_approval_comments = ?
+        WHERE assessment_id = ?
+        """,
+        (decision, username, utc_now(), comments, assessment_id),
+    )
+    insert_audit("Risk Assessment", assessment_id, "EDIT_REQUEST_DECISION", username, old, {"decision": decision, "comments": comments})
+    queue_raci_notifications(
+        "RISK_ASSESSMENT_EDIT_REQUEST_DECIDED",
+        "Risk Assessment",
+        assessment_id,
+        old["euc_id"],
+        username,
+        context={"Decision": decision, "Comments": comments},
+    )
+
+
+def update_risk_assessment_in_place(assessment_id: int, payload: dict[str, Any], username: str) -> None:
+    old = fetch_one("SELECT * FROM risk_assessments WHERE assessment_id = ?", (assessment_id,))
+    if not old:
+        raise ValueError("Risk assessment not found.")
+    if old.get("edit_request_status") != "Approved":
+        raise PermissionError("Risk assessment edits require prior approval by GCC or Data Validation.")
+    payload = {**old, **payload, "assessment_id": assessment_id, "status": "Submitted"}
+    calculated = calculate_excel_risk_assessment(payload)
+    inherent_risk = calculated["overall_inherent_risk"]
+    residual_risk = calculated["overall_residual_risk"]
+    effect_rank = {"Strong": 1, "Adequate": 2, "Weak": 3, "Not in place": 4}
+    control_effectiveness_score = max(
+        effect_rank[calculated["integrity_control_effectiveness"]],
+        effect_rank[calculated["timeliness_control_effectiveness"]],
+    )
+    now = utc_now()
+    execute(
+        """
+        UPDATE risk_assessments
+        SET assessment_date = ?, assessed_by = ?, integrity_accuracy_score = ?, timeliness_availability_score = ?,
+            complexity_score = ?, business_criticality_score = ?, control_effectiveness_score = ?,
+            inherent_risk = ?, residual_risk = ?, materiality_q1 = ?, materiality_q2 = ?, materiality_q3 = ?,
+            materially_supports_bcbs239 = ?, owner_integrity_inherent = ?, owner_timeliness_inherent = ?,
+            effective_integrity_inherent = ?, effective_timeliness_inherent = ?, integrity_control_effectiveness = ?,
+            timeliness_control_effectiveness = ?, integrity_residual_risk = ?, timeliness_residual_risk = ?,
+            overall_inherent_risk = ?, overall_residual_risk = ?, required_action = ?,
+            control_registration_risk_assessment = ?, control_privileged_access = ?, control_versioning_change_log = ?,
+            control_checks_reconciliations = ?, control_library_controls_cacrt = ?, control_operating_procedure = ?,
+            control_evidence_signoff = ?, control_resilience = ?, rationale = ?, trigger_type = ?,
+            status = 'Submitted', reviewed_by = NULL, reviewed_at = NULL, review_comments = NULL,
+            edit_request_status = 'Completed', last_edited_by = ?, last_edited_at = ?
+        WHERE assessment_id = ?
+        """,
+        (
+            payload.get("assessment_date", date.today().isoformat()),
+            payload.get("assessed_by", username),
+            _risk_score(calculated["owner_integrity_inherent"]),
+            _risk_score(calculated["owner_timeliness_inherent"]),
+            int(payload.get("complexity_score") or old.get("complexity_score") or 1),
+            _risk_score(inherent_risk),
+            control_effectiveness_score,
+            inherent_risk,
+            residual_risk,
+            payload.get("materiality_q1"),
+            payload.get("materiality_q2"),
+            payload.get("materiality_q3"),
+            calculated["materially_supports_bcbs239"],
+            calculated["owner_integrity_inherent"],
+            calculated["owner_timeliness_inherent"],
+            calculated["effective_integrity_inherent"],
+            calculated["effective_timeliness_inherent"],
+            calculated["integrity_control_effectiveness"],
+            calculated["timeliness_control_effectiveness"],
+            calculated["integrity_residual_risk"],
+            calculated["timeliness_residual_risk"],
+            calculated["overall_inherent_risk"],
+            calculated["overall_residual_risk"],
+            calculated["required_action"],
+            payload.get("control_registration_risk_assessment"),
+            payload.get("control_privileged_access"),
+            payload.get("control_versioning_change_log"),
+            payload.get("control_checks_reconciliations"),
+            payload.get("control_library_controls_cacrt"),
+            payload.get("control_operating_procedure"),
+            payload.get("control_evidence_signoff"),
+            payload.get("control_resilience"),
+            payload.get("rationale"),
+            payload.get("trigger_type", old.get("trigger_type") or "Periodic"),
+            username,
+            now,
+            assessment_id,
+        ),
+    )
+    latest = latest_risk_assessment(int(old["euc_id"]))
+    if latest and int(latest["assessment_id"]) == int(assessment_id):
+        execute(
+            "UPDATE eucs SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?, updated_at = ? WHERE euc_id = ?",
+            (inherent_risk, residual_risk, "Awaiting Documentation", "Awaiting Documentation", utc_now(), old["euc_id"]),
+        )
+    insert_audit("Risk Assessment", assessment_id, "EDIT", username, old, {**payload, **calculated, "status": "Submitted"})
+    queue_raci_notifications(
+        "RISK_ASSESSMENT_EDITED",
+        "Risk Assessment",
+        assessment_id,
+        old["euc_id"],
+        username,
+        context={"Overall inherent risk": inherent_risk, "Overall residual risk": residual_risk, "Status": "Submitted"},
+    )
     evaluate_and_update_completeness(old["euc_id"], username, create_missing_tasks=True)
 
 
