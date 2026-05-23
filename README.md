@@ -187,7 +187,7 @@ rm -rf uploads/euc_*
 streamlit run app.py
 ```
 
-The app will recreate seed data on next launch.
+The app will recreate only the minimum reference/configuration data for a fresh empty database. It does not auto-create demo EUCs on startup; load demo EUCs explicitly from Admin Configuration -> Seed/reset demo or by running `python seed_data.py`.
 
 ## Dashboard visibility note
 
@@ -340,3 +340,9 @@ Key points:
 - Each of the eight baseline controls has user-facing guidance in the Risk Assessment page.
 - `BCBS 239 output mapping` is now a controlled selector populated from the BCBS 239 material reports inventory list. Group IT Governance Administrator can maintain the list in `Admin Configuration -> BCBS 239 outputs`.
 - Previously restored functionality remains present: User Directory, RACI notification outbox, personal dashboard/task scoping, Components/Assets edit flow, document download/open controls, simplified evidence upload, risk assessment internal evidence links, lifecycle/completeness sync, task auto-closure, governed delete actions, and role-sensitive navigation.
+
+
+## Patch 26 notes
+
+- The Documents & Evidence Pack upload guidance now updates immediately when the selected document type changes. The document type selector is outside the submit form so Streamlit reruns the page and refreshes the explanation before upload.
+- Startup initialization now runs configuration/reference seeding only once for a fresh database. Existing users, RACI rules, BCBS 239 outputs, required artifact rules and other configuration rows are not recreated on every app restart. Demo EUC operational data remains opt-in only.

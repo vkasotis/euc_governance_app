@@ -118,6 +118,63 @@ def artifact_upload_guidance(document_type: str) -> str:
     )
 
 
+def get_app_setting(key: str) -> str | None:
+    row = fetch_one("SELECT setting_value FROM app_settings WHERE setting_key = ?", (key,))
+    return row["setting_value"] if row else None
+
+
+def set_app_setting(key: str, value: str, username: str = "system") -> None:
+    execute(
+        """
+        INSERT INTO app_settings(setting_key, setting_value, updated_by, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(setting_key) DO UPDATE SET
+            setting_value = excluded.setting_value,
+            updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at
+        """,
+        (key, value, username, utc_now()),
+    )
+
+
+def _safe_table_count(table_name: str) -> int:
+    try:
+        row = fetch_one(f"SELECT COUNT(*) AS n FROM {table_name}")
+        return int(row["n"] if row else 0)
+    except Exception:
+        return 0
+
+
+def initialize_reference_data_once(username: str = "system") -> None:
+    """Initialize configuration/reference data only once per database.
+
+    This prevents the app from recreating seeded/configuration feeds on every
+    Streamlit restart. Existing databases that already contain configuration
+    rows are marked as initialized and left unchanged. Explicit admin actions
+    can still run seed_database() or initialize_reference_data() when needed.
+    """
+    if get_app_setting("reference_data_initialized") == "1":
+        return
+
+    has_existing_configuration = any(
+        _safe_table_count(table) > 0
+        for table in (
+            "reference_data",
+            "due_date_rules",
+            "required_artifact_rules",
+            "user_profiles",
+            "raci_rules",
+            "bcbs239_outputs",
+        )
+    )
+    if has_existing_configuration:
+        set_app_setting("reference_data_initialized", "1", username)
+        return
+
+    initialize_reference_data(username)
+    set_app_setting("reference_data_initialized", "1", username)
+
+
 def _default_email(username: str) -> str:
     """Return the default seeded demo mailbox.
 
@@ -1066,6 +1123,11 @@ def effective_registration_control_status(payload: dict[str, Any]) -> str:
     assessment_id = payload.get("assessment_id")
     include_assessment_id = int(assessment_id) if status == "Accepted" and assessment_id else None
     readiness = registration_control_readiness(int(euc_id), include_assessment_id) if euc_id else {"allowed_status": "Partially in place"}
+    # Before independent acceptance, the control is capped by readiness. Once an
+    # assessment is Accepted and registration/mapping is complete, this baseline
+    # control becomes evidenced by the accepted assessment and complete EUC record.
+    if status == "Accepted" and readiness["allowed_status"] == "In place and evidenced" and selected != "Not in place":
+        return "In place and evidenced"
     return _cap_control_status(selected, readiness["allowed_status"])
 
 
@@ -1596,7 +1658,7 @@ def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
             calculated["overall_inherent_risk"],
             calculated["overall_residual_risk"],
             calculated["required_action"],
-            payload.get("control_registration_risk_assessment"),
+            calculated.get("effective_registration_risk_assessment_control", payload.get("control_registration_risk_assessment")),
             payload.get("control_privileged_access"),
             payload.get("control_versioning_change_log"),
             payload.get("control_checks_reconciliations"),
@@ -1673,7 +1735,7 @@ def recalculate_risk_assessment(assessment_id: int, username: str = "system", wr
             materially_supports_bcbs239 = ?, effective_integrity_inherent = ?, effective_timeliness_inherent = ?,
             integrity_control_effectiveness = ?, timeliness_control_effectiveness = ?,
             integrity_residual_risk = ?, timeliness_residual_risk = ?, overall_inherent_risk = ?,
-            overall_residual_risk = ?, required_action = ?
+            overall_residual_risk = ?, required_action = ?, control_registration_risk_assessment = ?
         WHERE assessment_id = ?
         """,
         (
@@ -1693,6 +1755,7 @@ def recalculate_risk_assessment(assessment_id: int, username: str = "system", wr
             calculated["overall_inherent_risk"],
             calculated["overall_residual_risk"],
             calculated["required_action"],
+            calculated.get("effective_registration_risk_assessment_control", row.get("control_registration_risk_assessment")),
             assessment_id,
         ),
     )

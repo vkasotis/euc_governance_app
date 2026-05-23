@@ -773,6 +773,14 @@ CREATE_TABLES_SQL = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS app_settings (
+        setting_key TEXT PRIMARY KEY,
+        setting_value TEXT,
+        updated_by TEXT,
+        updated_at TEXT NOT NULL
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS notification_outbox (
         notification_id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_type TEXT NOT NULL,

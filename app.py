@@ -90,9 +90,10 @@ def navigation_for_role(role: str) -> list[str]:
 
 def bootstrap() -> None:
     init_db()
-    svc.initialize_reference_data("system")
-    # Do not auto-seed EUC operational data on startup. Demo data can be
-    # loaded explicitly from Admin Configuration -> Seed/reset demo.
+    # Initialize reference/configuration feeds only once for a fresh database.
+    # Existing configuration and EUC operational data are left unchanged on
+    # Streamlit restarts/redeploys. Demo EUCs are never auto-seeded here.
+    svc.initialize_reference_data_once("system")
 
 
 def rerun() -> None:
@@ -975,10 +976,16 @@ def page_documents() -> None:
     with col_upload:
         st.subheader("Upload evidence")
         if svc.can_upload_evidence(role, username, euc) and require_write_access():
-            uploaded = st.file_uploader("Upload document / evidence")
+            # Keep document type outside the form so Streamlit reruns immediately
+            # when the user changes it and the guidance text stays in sync.
+            document_type = st.selectbox(
+                "Document type",
+                uploadable_document_types,
+                key=f"upload_document_type_{euc['euc_id']}",
+            )
+            st.info(svc.artifact_upload_guidance(document_type))
+            uploaded = st.file_uploader("Upload document / evidence", key=f"upload_file_{euc['euc_id']}")
             with st.form("doc_metadata"):
-                document_type = st.selectbox("Document type", uploadable_document_types)
-                st.info(svc.artifact_upload_guidance(document_type))
                 comments = st.text_area("Comments")
                 if st.form_submit_button("Save uploaded evidence"):
                     if uploaded is None:
