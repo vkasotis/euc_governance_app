@@ -14,6 +14,16 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+try:
+    from st_aggrid import AgGrid, DataReturnMode, GridOptionsBuilder, GridUpdateMode
+    AGGRID_AVAILABLE = True
+except Exception:  # pragma: no cover - fallback if dependency is not installed locally
+    AgGrid = None
+    DataReturnMode = None
+    GridOptionsBuilder = None
+    GridUpdateMode = None
+    AGGRID_AVAILABLE = False
+
 import services as svc
 from db import DATABASE_FILE, init_db, table_count
 from schema import (
@@ -256,15 +266,72 @@ def badge(value: Any) -> str:
     return f"{icon} {value}"
 
 
-def safe_df(df: pd.DataFrame, height: int | str | None = None) -> None:
-    """Render a dataframe without passing invalid height values to Streamlit.
+def _grid_height(height: int | str | None, df: pd.DataFrame) -> int:
+    """Return a safe grid height for Streamlit/AgGrid tables."""
+    if isinstance(height, int) and height > 0:
+        return height
+    if isinstance(height, str) and height == "auto":
+        return min(620, max(180, 40 + 36 * (len(df) + 1)))
+    return min(560, max(220, 44 + 36 * min(len(df) + 1, 12)))
 
-    Streamlit 1.40+ raises StreamlitInvalidHeightError when height=None or
-    non-positive values are passed explicitly. Omitting the argument is safe and
-    lets Streamlit calculate the default table height.
+
+def _grid_key(df: pd.DataFrame, prefix: str = "grid") -> str:
+    """Create a collision-resistant key for read-only grid render calls."""
+    return f"{prefix}_{id(df)}_{len(df)}_{abs(hash(tuple(map(str, df.columns)))) % 100000}"
+
+
+def _build_grid_options(
+    df: pd.DataFrame,
+    *,
+    selection_mode: str | None = None,
+    use_checkbox: bool = False,
+) -> dict[str, Any]:
+    """Create Excel-like AgGrid options with filters on every visible column."""
+    gb = GridOptionsBuilder.from_dataframe(df)
+    gb.configure_default_column(
+        filter=True,
+        floatingFilter=True,
+        sortable=True,
+        resizable=True,
+        wrapText=True,
+        autoHeight=False,
+    )
+    gb.configure_grid_options(
+        enableCellTextSelection=True,
+        ensureDomOrder=True,
+        suppressMenuHide=False,
+        animateRows=False,
+    )
+    if selection_mode:
+        gb.configure_selection(selection_mode=selection_mode, use_checkbox=use_checkbox)
+    return gb.build()
+
+
+def safe_df(df: pd.DataFrame, height: int | str | None = None, *, key: str | None = None) -> None:
+    """Render a user-facing table with in-grid filters on every column.
+
+    AgGrid gives users Excel-like column filters, sorting, resizing and search
+    menus inside the table itself. If the optional component is unavailable, the
+    function falls back to Streamlit's native dataframe without passing invalid
+    height values.
     """
     if df is None or df.empty:
         st.info("No records found for the current filters.")
+        return
+
+    display_df = df.copy()
+    if AGGRID_AVAILABLE:
+        AgGrid(
+            display_df,
+            gridOptions=_build_grid_options(display_df),
+            data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+            update_mode=GridUpdateMode.NO_UPDATE,
+            fit_columns_on_grid_load=False,
+            allow_unsafe_jscode=False,
+            theme="streamlit",
+            height=_grid_height(height, display_df),
+            key=key or _grid_key(display_df),
+        )
         return
 
     kwargs: dict[str, Any] = {"use_container_width": True, "hide_index": True}
@@ -272,7 +339,43 @@ def safe_df(df: pd.DataFrame, height: int | str | None = None) -> None:
         kwargs["height"] = height
     elif isinstance(height, str) and height == "auto":
         kwargs["height"] = "auto"
-    st.dataframe(df, **kwargs)
+    st.dataframe(display_df, **kwargs)
+
+
+def selectable_df(
+    df: pd.DataFrame,
+    *,
+    key: str,
+    height: int | str | None = None,
+    selection_mode: str = "single",
+) -> list[dict[str, Any]]:
+    """Render an AgGrid selection table and return selected row dictionaries."""
+    if df is None or df.empty:
+        st.info("No records found for the current filters.")
+        return []
+
+    display_df = df.copy()
+    if not AGGRID_AVAILABLE:
+        safe_df(display_df, height=height, key=key)
+        return []
+
+    response = AgGrid(
+        display_df,
+        gridOptions=_build_grid_options(display_df, selection_mode=selection_mode, use_checkbox=True),
+        data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+        update_mode=GridUpdateMode.SELECTION_CHANGED,
+        fit_columns_on_grid_load=False,
+        allow_unsafe_jscode=False,
+        theme="streamlit",
+        height=_grid_height(height, display_df),
+        key=key,
+    )
+    selected = response.get("selected_rows", []) if isinstance(response, dict) else []
+    if isinstance(selected, pd.DataFrame):
+        return selected.to_dict("records")
+    if isinstance(selected, list):
+        return selected
+    return []
 
 
 def filter_dataframe_all_fields(
@@ -509,7 +612,7 @@ def record_table(record: dict[str, Any], fields: list[str | tuple[str, str]], *,
         rows.append({"Field": label, "Value": display_value(record.get(key))})
     if title:
         st.markdown(f"#### {title}")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    safe_df(pd.DataFrame(rows), key=f"record_table_{abs(hash(str(rows))) % 100000}")
 
 
 def assessment_review_card(assessment: dict[str, Any]) -> None:
@@ -556,7 +659,7 @@ def assessment_review_card(assessment: dict[str, Any]) -> None:
             },
         ]
     )
-    st.dataframe(dimensions, use_container_width=True, hide_index=True)
+    safe_df(dimensions, height=180, key=f"assessment_dimensions_{assessment.get('assessment_id', 'new')}")
 
     st.markdown("##### Baseline controls")
     effective_reg_status = svc.effective_registration_control_status(assessment)
@@ -576,7 +679,7 @@ def assessment_review_card(assessment: dict[str, Any]) -> None:
             {"Control": "Resilience", "Selected status": display_value(assessment.get("control_resilience")), "Effective status": display_value(assessment.get("control_resilience"))},
         ]
     )
-    st.dataframe(controls, use_container_width=True, hide_index=True)
+    safe_df(controls, height=300, key=f"assessment_controls_{assessment.get('assessment_id', 'new')}")
 
     st.markdown("##### Required action and rationale")
     record_table(
@@ -1944,24 +2047,11 @@ def page_admin() -> None:
         if users_df.empty:
             st.info("No users have been configured yet.")
         else:
-            try:
-                event = st.dataframe(
-                    users_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=360,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key="user_directory_table",
-                )
-                selected_rows = list(getattr(event.selection, "rows", [])) if hasattr(event, "selection") else []
-            except TypeError:
-                st.dataframe(users_df, use_container_width=True, hide_index=True, height=360)
-                selected_rows = []
+            selected_rows = selectable_df(users_df, key="user_directory_table", height=360)
             labels = {f"{row['username']} — {row['role']}": int(row["user_id"]) for _, row in users_df.iterrows()}
             fallback_label = st.selectbox("Selected user", list(labels.keys()), key="user_directory_selectbox")
             fallback_id = labels[fallback_label]
-            selected_id = int(users_df.iloc[selected_rows[0]]["user_id"]) if selected_rows else fallback_id
+            selected_id = int(selected_rows[0].get("user_id")) if selected_rows and selected_rows[0].get("user_id") is not None else fallback_id
             selected_user = svc.get_user_profile(selected_id)
 
         if selected_user:

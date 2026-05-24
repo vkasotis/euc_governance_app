@@ -231,3 +231,7 @@ The app will recreate schema/reference data on next launch. Demo EUC data is not
 - Documents & Evidence Pack now provides filters for every field in the Required Artifact Checklist.
 - The checklist filter panel supports a global search across all fields, multi-select filters for low-cardinality columns, and contains-text filters for higher-cardinality columns.
 - The same all-field checklist filtering is available on the standalone Required Artifact Checklist page.
+
+## Table filtering and grid UX
+
+All user-facing tabular views now use `streamlit-aggrid` where available. Each table supports in-grid column filters, floating filter boxes, sorting, resizing and filtered/sorted grid state. The app falls back to Streamlit's native dataframe rendering only if the optional component is not installed.
