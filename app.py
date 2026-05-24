@@ -281,13 +281,61 @@ def _grid_key(df: pd.DataFrame, prefix: str = "grid") -> str:
     return f"{prefix}_{id(df)}_{len(df)}_{abs(hash(tuple(map(str, df.columns)))) % 100000}"
 
 
+def _labelize_column(column: Any) -> str:
+    """Return a readable table header from a dataframe column name."""
+    text = str(column).strip()
+    replacements = {
+        "euc": "EUC",
+        "id": "ID",
+        "bcbs239": "BCBS 239",
+        "cacrt": "CACRT",
+        "cde": "CDE",
+        "kri": "KRI",
+        "sla": "SLA",
+        "spof": "SPOF",
+        "uat": "UAT",
+        "rca": "RCA",
+        "raci": "RACI",
+        "iof": "IOF",
+        "rrf": "RRF",
+        "op": "OP",
+        "url": "URL",
+    }
+    parts = text.replace("/", " / ").replace("_", " ").split()
+    rendered: list[str] = []
+    for part in parts:
+        key = part.lower()
+        rendered.append(replacements.get(key, part.capitalize()))
+    return " ".join(rendered)
+
+
+def _estimate_grid_column_width(series: pd.Series, header: str) -> int:
+    """Estimate a readable AgGrid width while still allowing horizontal scroll."""
+    try:
+        sample = series.dropna().astype(str).head(50).tolist()
+    except Exception:
+        sample = []
+    longest_value = max([len(str(header)), *[len(v) for v in sample]], default=len(str(header)))
+    name = str(series.name).lower()
+
+    if name.endswith("_id") or name in {"id", "version", "mandatory", "active", "active_flag"}:
+        return max(95, min(150, 18 + longest_value * 7))
+    if any(token in name for token in ["description", "comments", "rationale", "summary", "what_to_upload", "finding_description", "remediation", "impact_assessment"]):
+        return max(280, min(520, 28 + longest_value * 7))
+    if any(token in name for token in ["file_path", "storage_location", "bcbs239_output_mapping", "report", "output", "requirement"]):
+        return max(220, min(440, 28 + longest_value * 7))
+    if any(token in name for token in ["date", "at", "due", "expiry", "review"]):
+        return max(140, min(210, 28 + longest_value * 7))
+    return max(160, min(360, 28 + longest_value * 7))
+
+
 def _build_grid_options(
     df: pd.DataFrame,
     *,
     selection_mode: str | None = None,
     use_checkbox: bool = False,
 ) -> dict[str, Any]:
-    """Create Excel-like AgGrid options with filters on every visible column."""
+    """Create readable Excel-like AgGrid options with filters on every column."""
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_default_column(
         filter=True,
@@ -295,13 +343,37 @@ def _build_grid_options(
         sortable=True,
         resizable=True,
         wrapText=True,
-        autoHeight=False,
+        autoHeight=True,
+        wrapHeaderText=True,
+        autoHeaderHeight=True,
+        minWidth=150,
+        cellStyle={"whiteSpace": "normal", "lineHeight": "1.25"},
     )
+    for column in df.columns:
+        header = _labelize_column(column)
+        width = _estimate_grid_column_width(df[column], header)
+        gb.configure_column(
+            column,
+            headerName=header,
+            headerTooltip=header,
+            tooltipField=column,
+            width=width,
+            minWidth=min(width, 180),
+            wrapText=True,
+            autoHeight=True,
+        )
     gb.configure_grid_options(
         enableCellTextSelection=True,
         ensureDomOrder=True,
         suppressMenuHide=False,
         animateRows=False,
+        tooltipShowDelay=250,
+        rowHeight=44,
+        headerHeight=58,
+        floatingFiltersHeight=34,
+        suppressColumnVirtualisation=False,
+        alwaysShowHorizontalScroll=True,
+        alwaysShowVerticalScroll=True,
     )
     if selection_mode:
         gb.configure_selection(selection_mode=selection_mode, use_checkbox=use_checkbox)

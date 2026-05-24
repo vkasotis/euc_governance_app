@@ -235,3 +235,11 @@ The app will recreate schema/reference data on next launch. Demo EUC data is not
 ## Table filtering and grid UX
 
 All user-facing tabular views now use `streamlit-aggrid` where available. Each table supports in-grid column filters, floating filter boxes, sorting, resizing and filtered/sorted grid state. The app falls back to Streamlit's native dataframe rendering only if the optional component is not installed.
+
+## Patch 37 notes
+
+- AgGrid table readability has been improved across user-facing tables.
+- Column headers now use readable labels instead of raw/truncated field names where possible.
+- Column widths now use minimum readable widths and horizontal scrolling, rather than compressing all columns into the viewport.
+- Long text cells wrap and show tooltips, so users can read full wording without relying on abbreviated column names.
+- Existing in-table filters, no-rerun filtering behavior, Option B role-based menu, and evidence-upload reset behavior are preserved.
