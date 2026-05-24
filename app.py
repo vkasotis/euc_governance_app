@@ -275,6 +275,79 @@ def safe_df(df: pd.DataFrame, height: int | str | None = None) -> None:
     st.dataframe(df, **kwargs)
 
 
+def filter_dataframe_all_fields(
+    df: pd.DataFrame,
+    key_prefix: str,
+    *,
+    title: str = "Filter table",
+    expanded: bool = False,
+) -> pd.DataFrame:
+    """Provide per-column filters for every dataframe field.
+
+    The Required Artifact Checklist has mixed text/status/date fields and users
+    need to filter all of them without exporting to CSV. Low-cardinality columns
+    receive multi-select filters; high-cardinality columns receive contains-text
+    filters. A global search is also applied across every visible field.
+    """
+    if df is None or df.empty:
+        return df
+
+    working = df.copy()
+    # Convert object-like values to strings only for matching, not for display.
+    with st.expander(title, expanded=expanded):
+        global_search = st.text_input(
+            "Search all fields",
+            key=f"{key_prefix}_global_search",
+            placeholder="Type any text to search across all checklist columns",
+        ).strip()
+        if global_search:
+            haystack = working.fillna("").astype(str).agg(" | ".join, axis=1)
+            working = working[haystack.str.contains(global_search, case=False, regex=False, na=False)]
+
+        if working.empty:
+            st.caption("No rows match the global search.")
+            return working
+
+        st.caption("Column filters apply in addition to the global search.")
+        filter_cols = st.columns(3)
+        for idx, col_name in enumerate(df.columns):
+            col_series = working[col_name] if col_name in working.columns else df[col_name]
+            non_null = col_series.dropna()
+            as_text = non_null.astype(str).map(str.strip)
+            unique_values = sorted(v for v in as_text.unique().tolist() if v not in {"", "nan", "None"})
+            label = str(col_name).replace("_", " ").title()
+            container = filter_cols[idx % 3]
+
+            if len(unique_values) == 0:
+                continue
+            if len(unique_values) <= 30:
+                selected_values = container.multiselect(
+                    label,
+                    unique_values,
+                    default=[],
+                    key=f"{key_prefix}_filter_{col_name}",
+                )
+                if selected_values:
+                    working = working[
+                        working[col_name].fillna("").astype(str).str.strip().isin(selected_values)
+                    ]
+            else:
+                contains_value = container.text_input(
+                    f"{label} contains",
+                    key=f"{key_prefix}_filter_{col_name}",
+                    placeholder="Contains...",
+                ).strip()
+                if contains_value:
+                    working = working[
+                        working[col_name].fillna("").astype(str).str.contains(
+                            contains_value, case=False, regex=False, na=False
+                        )
+                    ]
+
+        st.caption(f"Showing {len(working)} of {len(df)} row(s).")
+    return working
+
+
 
 
 def resolve_uploaded_file_path(file_path: Any) -> Path | None:
@@ -1207,7 +1280,13 @@ def page_documents() -> None:
     svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
     checklist = svc.artifact_checklist(euc["euc_id"])
     st.caption("Use the what_to_upload column to understand exactly what evidence is expected for each requirement.")
-    safe_df(checklist, height=300)
+    filtered_checklist = filter_dataframe_all_fields(
+        checklist,
+        key_prefix=f"documents_checklist_{euc['euc_id']}",
+        title="Filter required artifact checklist",
+        expanded=True,
+    )
+    safe_df(filtered_checklist, height=300)
 
     st.subheader("Completed risk assessments used as internal evidence")
     assessments = svc.get_risk_assessments(euc["euc_id"])
@@ -1379,7 +1458,13 @@ def page_checklist() -> None:
     )
     st.caption("Checklist baseline follows Overall Inherent Risk / BCBS 239 materiality. Residual risk is used for remediation, escalation and exception handling.")
     checklist = svc.artifact_checklist(euc["euc_id"])
-    safe_df(checklist, height=350)
+    filtered_checklist = filter_dataframe_all_fields(
+        checklist,
+        key_prefix=f"standalone_checklist_{euc['euc_id']}",
+        title="Filter required artifact checklist",
+        expanded=True,
+    )
+    safe_df(filtered_checklist, height=350)
     c1, c2 = st.columns(2)
     if c1.button("Recalculate completeness"):
         status = svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)

@@ -225,3 +225,9 @@ The app will recreate schema/reference data on next launch. Demo EUC data is not
 - Documents & Evidence Pack upload reset has been hardened: after saving evidence, the selected artifact types, uploaded files, and comments are cleared by rotating EUC-specific widget and form keys.
 - The evidence upload flow explicitly confirms the number of evidence records to be created when one file is mapped to several document types or several files are uploaded for the same type.
 - Uploaded file names now include microseconds and a short UUID segment to avoid overwriting files when multiple uploads have the same original filename.
+
+## Patch 34 notes
+
+- Documents & Evidence Pack now provides filters for every field in the Required Artifact Checklist.
+- The checklist filter panel supports a global search across all fields, multi-select filters for low-cardinality columns, and contains-text filters for higher-cardinality columns.
+- The same all-field checklist filtering is available on the standalone Required Artifact Checklist page.
