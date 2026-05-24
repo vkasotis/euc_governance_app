@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import html
+import inspect
 import mimetypes
 import zipfile
 from datetime import date, datetime, timedelta
@@ -307,6 +308,32 @@ def _build_grid_options(
     return gb.build()
 
 
+
+
+def _aggrid_event_kwargs(*, read_only: bool, selection: bool = False) -> dict[str, Any]:
+    """Return AgGrid event settings that avoid page reruns while typing filters.
+
+    For read-only tables, filtering/sorting/resizing should stay client-side. Some
+    streamlit-aggrid versions rerun Streamlit on filter changes unless update_on
+    is explicitly empty. Selection tables still need a rerun on row selection.
+    """
+    if not AGGRID_AVAILABLE:
+        return {}
+    try:
+        params = inspect.signature(AgGrid).parameters
+    except Exception:
+        params = {}
+    if "update_on" in params:
+        if selection:
+            return {"update_on": ["selectionChanged"]}
+        if read_only:
+            return {"update_on": []}
+    if selection:
+        return {"update_mode": GridUpdateMode.SELECTION_CHANGED}
+    if read_only:
+        return {"update_mode": GridUpdateMode.NO_UPDATE}
+    return {}
+
 def safe_df(df: pd.DataFrame, height: int | str | None = None, *, key: str | None = None) -> None:
     """Render a user-facing table with in-grid filters on every column.
 
@@ -325,8 +352,8 @@ def safe_df(df: pd.DataFrame, height: int | str | None = None, *, key: str | Non
             display_df,
             gridOptions=_build_grid_options(display_df),
             data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-            update_mode=GridUpdateMode.NO_UPDATE,
             fit_columns_on_grid_load=False,
+            **_aggrid_event_kwargs(read_only=True),
             allow_unsafe_jscode=False,
             theme="streamlit",
             height=_grid_height(height, display_df),
@@ -363,8 +390,8 @@ def selectable_df(
         display_df,
         gridOptions=_build_grid_options(display_df, selection_mode=selection_mode, use_checkbox=True),
         data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-        update_mode=GridUpdateMode.SELECTION_CHANGED,
         fit_columns_on_grid_load=False,
+        **_aggrid_event_kwargs(read_only=False, selection=True),
         allow_unsafe_jscode=False,
         theme="streamlit",
         height=_grid_height(height, display_df),
@@ -1382,14 +1409,8 @@ def page_documents() -> None:
     # Synchronize documentation completeness/lifecycle before showing the checklist.
     svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
     checklist = svc.artifact_checklist(euc["euc_id"])
-    st.caption("Use the what_to_upload column to understand exactly what evidence is expected for each requirement.")
-    filtered_checklist = filter_dataframe_all_fields(
-        checklist,
-        key_prefix=f"documents_checklist_{euc['euc_id']}",
-        title="Filter required artifact checklist",
-        expanded=True,
-    )
-    safe_df(filtered_checklist, height=300)
+    st.caption("Use the what_to_upload column to understand exactly what evidence is expected for each requirement. Filter directly inside the table using the column filter boxes.")
+    safe_df(checklist, height=300, key=f"documents_required_artifacts_{euc['euc_id']}")
 
     st.subheader("Completed risk assessments used as internal evidence")
     assessments = svc.get_risk_assessments(euc["euc_id"])
@@ -1561,13 +1582,8 @@ def page_checklist() -> None:
     )
     st.caption("Checklist baseline follows Overall Inherent Risk / BCBS 239 materiality. Residual risk is used for remediation, escalation and exception handling.")
     checklist = svc.artifact_checklist(euc["euc_id"])
-    filtered_checklist = filter_dataframe_all_fields(
-        checklist,
-        key_prefix=f"standalone_checklist_{euc['euc_id']}",
-        title="Filter required artifact checklist",
-        expanded=True,
-    )
-    safe_df(filtered_checklist, height=350)
+    st.caption("Filter directly inside the table using the column filter boxes.")
+    safe_df(checklist, height=350, key=f"standalone_required_artifacts_{euc['euc_id']}")
     c1, c2 = st.columns(2)
     if c1.button("Recalculate completeness"):
         status = svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
