@@ -204,3 +204,17 @@ The app will recreate schema/reference data on next launch. Demo EUC data is not
 - Added KPI cards for total EUCs, BCBS mapping, documentation completeness, High/Very High inherent/residual risk, overdue reviews, incidents, exceptions, remediation, industrialization, Library of Controls coverage, and operationalization documentation coverage.
 - Added a Custom Reports tab allowing authorized reporting users to create reusable reports from approved datasets without SQL.
 - Added the `custom_report_definitions` table and lightweight migration support for older SQLite databases.
+
+## Patch 31 updates
+
+- Documents & Evidence Pack now clears selected artifact types, uploaded files, and comments immediately after a successful evidence submission by rotating the Streamlit widget keys after save.
+- Material Changes & Reassessments are treated as EUC Owner / operating-unit initiated records. Governance roles may review, challenge, monitor, or request remediation, but Group IT Governance remains platform/configuration administrator rather than owner of EUC content.
+- Exceptions are treated as EUC Owner raised requests for temporary risk acceptance. GCC owns governance handling and tracking, Data Validation / relevant functions may be consulted, and approval is performed by the relevant Approver / Head of Unit or senior governance route depending on risk.
+
+## Patch 32 updates
+
+- Replaced the long sidebar radio navigation with a compact role-based workbench plus grouped sidebar navigation.
+- The Home page now displays role-specific action cards. Each card routes the user to the relevant operational, review, governance, or administration page.
+- Sidebar menu buttons are shown only for roles that should access those pages. Direct page access is also guarded by the same role/page matrix.
+- Group IT Governance Administrator navigation is limited to platform/configuration, email-notification administration, and reports; it does not expose EUC registry, risk-assessment, evidence-upload, exception, incident, or material-change content workflows.
+- EUC Owner, Contributor, Data Validation, GCC, Approver, and Internal Audit / read-only users each receive a different workbench and navigation scope aligned with their responsibilities.

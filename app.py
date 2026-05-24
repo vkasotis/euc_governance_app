@@ -71,24 +71,148 @@ REPORTS_ACCESS_ROLES = {svc.GCC_ROLE, svc.ADMIN_ROLE, svc.DVU_ROLE}
 NOTIFICATION_ACCESS_ROLES = {svc.GCC_ROLE, svc.ADMIN_ROLE, svc.DVU_ROLE}
 AUDIT_ACCESS_ROLES = {svc.GCC_ROLE}
 
+# Role-scoped page access. These sets drive both the compact grouped menu and
+# direct page-access guards. Group IT Governance Administrator is intentionally
+# limited to platform/configuration/reporting functions and does not receive
+# EUC content, risk-assessment, evidence-review or operational workflow pages.
+PAGE_ACCESS_ROLES = {
+    "Home / Dashboard": set(ROLES),
+    "EUC Inventory": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE, svc.GCC_ROLE, svc.DVU_ROLE, svc.READ_ONLY_ROLE},
+    "Register New EUC": {svc.OWNER_ROLE},
+    "EUC Detail View": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE, svc.GCC_ROLE, svc.DVU_ROLE, svc.APPROVER_ROLE, svc.READ_ONLY_ROLE},
+    "Components / Assets": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE},
+    "Risk Assessment": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE, svc.GCC_ROLE, svc.DVU_ROLE, svc.READ_ONLY_ROLE},
+    "Documents & Evidence Pack": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE, svc.GCC_ROLE, svc.DVU_ROLE, svc.APPROVER_ROLE, svc.READ_ONLY_ROLE},
+    "Required Artifact Checklist": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE, svc.GCC_ROLE, svc.DVU_ROLE, svc.READ_ONLY_ROLE},
+    "Tasks & Remediation": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE, svc.GCC_ROLE, svc.DVU_ROLE, svc.APPROVER_ROLE},
+    "Data Validation Review Queue": {svc.DVU_ROLE},
+    "GCC Monitoring View": {svc.GCC_ROLE},
+    "Findings & Challenge Management": {svc.GCC_ROLE, svc.DVU_ROLE, svc.READ_ONLY_ROLE},
+    "Exceptions": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE, svc.GCC_ROLE, svc.DVU_ROLE, svc.APPROVER_ROLE, svc.READ_ONLY_ROLE},
+    "Incidents & Near Misses": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE, svc.GCC_ROLE, svc.DVU_ROLE, svc.READ_ONLY_ROLE},
+    "Material Changes & Reassessments": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE, svc.GCC_ROLE, svc.DVU_ROLE, svc.READ_ONLY_ROLE},
+    "Industrialization & Decommissioning": {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE, svc.GCC_ROLE, svc.READ_ONLY_ROLE},
+    "Reports & KPIs": REPORTS_ACCESS_ROLES,
+    "Admin Configuration": {svc.ADMIN_ROLE},
+    "Email Notifications": NOTIFICATION_ACCESS_ROLES,
+    "Audit Trail": AUDIT_ACCESS_ROLES,
+}
+
+NAVIGATION_GROUPS = [
+    (
+        "My Work",
+        ["Home / Dashboard", "EUC Inventory", "EUC Detail View", "Tasks & Remediation"],
+    ),
+    (
+        "EUC Lifecycle",
+        [
+            "Register New EUC",
+            "Components / Assets",
+            "Risk Assessment",
+            "Documents & Evidence Pack",
+            "Required Artifact Checklist",
+            "Material Changes & Reassessments",
+            "Incidents & Near Misses",
+            "Exceptions",
+            "Industrialization & Decommissioning",
+        ],
+    ),
+    (
+        "Review & Oversight",
+        [
+            "Data Validation Review Queue",
+            "GCC Monitoring View",
+            "Findings & Challenge Management",
+            "Reports & KPIs",
+            "Email Notifications",
+            "Audit Trail",
+        ],
+    ),
+    (
+        "Administration",
+        ["Admin Configuration"],
+    ),
+]
+
+WORKBENCH_ACTIONS_BY_ROLE = {
+    svc.OWNER_ROLE: [
+        ("Register New EUC", "Create a new EUC application record"),
+        ("Risk Assessment", "Complete or review your EUC risk assessments"),
+        ("Documents & Evidence Pack", "Upload required evidence and review checklist status"),
+        ("Tasks & Remediation", "Work on tasks assigned to you"),
+        ("Material Changes & Reassessments", "Record a material change and trigger reassessment"),
+        ("Exceptions", "Raise or monitor an exception request"),
+    ],
+    svc.CONTRIBUTOR_ROLE: [
+        ("EUC Inventory", "Open EUCs delegated to you"),
+        ("Risk Assessment", "Assist with submitted or amended assessments"),
+        ("Documents & Evidence Pack", "Upload evidence for delegated EUCs"),
+        ("Tasks & Remediation", "Work on tasks assigned to you"),
+        ("Material Changes & Reassessments", "Record change information for delegated EUCs"),
+        ("Incidents & Near Misses", "Log incident information for delegated EUCs"),
+    ],
+    svc.DVU_ROLE: [
+        ("Data Validation Review Queue", "Review EUCs ready for independent validation"),
+        ("Risk Assessment", "Review submitted risk assessments"),
+        ("Documents & Evidence Pack", "Review evidence submissions"),
+        ("Findings & Challenge Management", "Raise or manage findings"),
+        ("Tasks & Remediation", "Review your validation task queue"),
+        ("Reports & KPIs", "Use policy MI and KPI reports"),
+    ],
+    svc.GCC_ROLE: [
+        ("GCC Monitoring View", "Monitor portfolio risk, gaps and events"),
+        ("Findings & Challenge Management", "Govern findings and remediation"),
+        ("Exceptions", "Monitor and challenge exception records"),
+        ("Incidents & Near Misses", "Monitor incident and near-miss records"),
+        ("Reports & KPIs", "Run policy MI and KPI reports"),
+        ("Audit Trail", "Inspect immutable audit activity"),
+    ],
+    svc.ADMIN_ROLE: [
+        ("Admin Configuration", "Maintain users, reference data, BCBS outputs and system rules"),
+        ("Email Notifications", "Monitor RACI notification outbox and rules"),
+        ("Reports & KPIs", "Run portfolio reports without editing EUC content"),
+    ],
+    svc.APPROVER_ROLE: [
+        ("Tasks & Remediation", "Review tasks assigned to you"),
+        ("Exceptions", "Approve or reject exception requests"),
+        ("EUC Detail View", "View supporting EUC and evidence context"),
+        ("Documents & Evidence Pack", "View supporting evidence"),
+    ],
+    svc.READ_ONLY_ROLE: [
+        ("EUC Inventory", "View EUCs available to audit/read-only users"),
+        ("EUC Detail View", "Inspect EUC records and history"),
+        ("Documents & Evidence Pack", "View evidence records"),
+        ("Risk Assessment", "View risk assessment history"),
+        ("Findings & Challenge Management", "View findings"),
+        ("Exceptions", "View exceptions"),
+    ],
+}
+
 
 def can_access_page(page: str, role: str) -> bool:
     """Central page-access guard for role-sensitive navigation items."""
-    if page == "Register New EUC":
-        return role in {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE}
-    if page == "Reports & KPIs":
-        return role in REPORTS_ACCESS_ROLES
-    if page == "Email Notifications":
-        return role in NOTIFICATION_ACCESS_ROLES
-    if page == "Audit Trail":
-        return role in AUDIT_ACCESS_ROLES
-    return True
+    return role in PAGE_ACCESS_ROLES.get(page, set())
 
 
 def navigation_for_role(role: str) -> list[str]:
     """Return only the pages the current role is allowed to open."""
     return [page for page in NAVIGATION if can_access_page(page, role)]
 
+
+def navigation_groups_for_role(role: str) -> list[tuple[str, list[str]]]:
+    """Return grouped navigation entries after applying page access rules."""
+    groups: list[tuple[str, list[str]]] = []
+    for group_name, pages in NAVIGATION_GROUPS:
+        allowed = [page for page in pages if can_access_page(page, role)]
+        if allowed:
+            groups.append((group_name, allowed))
+    return groups
+
+
+def set_selected_page(page: str) -> None:
+    """Set the current page and rerun to emulate navigation buttons."""
+    st.session_state["selected_page"] = page
+    rerun()
 
 def bootstrap() -> None:
     init_db()
@@ -565,11 +689,26 @@ def show_sidebar() -> str:
     allowed_pages = navigation_for_role(role)
     if not allowed_pages:
         allowed_pages = ["Home / Dashboard"]
-    page = st.sidebar.radio("Navigation", allowed_pages, index=0)
+
+    selected_page = st.session_state.get("selected_page", "Home / Dashboard")
+    if selected_page not in allowed_pages:
+        selected_page = "Home / Dashboard" if "Home / Dashboard" in allowed_pages else allowed_pages[0]
+        st.session_state["selected_page"] = selected_page
+
+    st.sidebar.markdown("### Navigation")
+    for group_name, pages in navigation_groups_for_role(role):
+        st.sidebar.markdown(f"**{group_name}**")
+        for page in pages:
+            is_current = page == selected_page
+            label = f"➤ {page}" if is_current else page
+            if st.sidebar.button(label, key=f"nav_{group_name}_{page}", use_container_width=True, disabled=is_current):
+                st.session_state["selected_page"] = page
+                rerun()
+        st.sidebar.caption(" ")
 
     st.sidebar.divider()
     st.sidebar.caption(f"SQLite: `{DATABASE_FILE.name}` · Uploads: `/uploads`")
-    return page
+    return st.session_state.get("selected_page", selected_page)
 
 
 def metric_grid(metrics: dict[str, int]) -> None:
@@ -580,9 +719,28 @@ def metric_grid(metrics: dict[str, int]) -> None:
             col.metric(label, value)
 
 
+def render_role_workbench(role: str) -> None:
+    """Role-specific action cards for the Home page."""
+    actions = [(page, desc) for page, desc in WORKBENCH_ACTIONS_BY_ROLE.get(role, []) if can_access_page(page, role)]
+    if not actions:
+        return
+    st.subheader("Role workbench")
+    st.caption("Quick actions are scoped to the current role. Portfolio monitoring and administration actions appear only for the roles that own those responsibilities.")
+    for start in range(0, len(actions), 3):
+        cols = st.columns(3)
+        for col, (page, description) in zip(cols, actions[start : start + 3]):
+            with col:
+                with st.container(border=True):
+                    st.markdown(f"**{page}**")
+                    st.caption(description)
+                    if st.button("Open", key=f"workbench_{role}_{page}", use_container_width=True):
+                        set_selected_page(page)
+
+
 def page_dashboard() -> None:
     st.title("Home / Dashboard")
     username, role = current_user()
+    render_role_workbench(role)
     metrics = svc.dashboard_metrics(role, username)
     metric_grid(metrics)
 
@@ -639,8 +797,8 @@ def page_inventory() -> None:
 def page_register() -> None:
     st.title("Register New EUC")
     username, role = current_user()
-    if role not in {svc.OWNER_ROLE, svc.CONTRIBUTOR_ROLE}:
-        st.warning("Registration is restricted to EUC Owners and delegated contributors. Group IT Governance Administrator manages the platform/configuration, not EUC registry content.")
+    if role != svc.OWNER_ROLE:
+        st.warning("Registration is restricted to EUC Owners. Delegates can assist with assigned EUCs after registration. Group IT Governance Administrator manages the platform/configuration, not EUC registry content.")
         return
     if not require_write_access():
         return
@@ -1088,10 +1246,20 @@ def page_documents() -> None:
     with col_upload:
         st.subheader("Upload evidence")
         if svc.can_upload_evidence(role, username, euc) and require_write_access():
+            # Use a nonce in widget keys so the selected artifact types and uploaded files
+            # are cleared immediately after a successful upload submission.
+            reset_key = "doc_upload_reset_nonce"
+            st.session_state.setdefault(reset_key, 0)
+            upload_nonce = st.session_state[reset_key]
+            type_widget_key = f"doc_upload_types_{euc['euc_id']}_{upload_nonce}"
+            file_widget_key = f"doc_upload_files_{euc['euc_id']}_{upload_nonce}"
+            comments_widget_key = f"doc_upload_comments_{euc['euc_id']}_{upload_nonce}"
+
             selected_types = st.multiselect(
                 "Document type(s) covered by the upload",
                 uploadable_document_types,
                 default=[],
+                key=type_widget_key,
                 help="Select one or more artifact types. A single uploaded file may cover multiple required artifact types; multiple files may also be uploaded for the same type.",
             )
             if selected_types:
@@ -1104,10 +1272,11 @@ def page_documents() -> None:
             uploaded_files = st.file_uploader(
                 "Upload one or more document / evidence files",
                 accept_multiple_files=True,
+                key=file_widget_key,
                 help="You may upload multiple documents for the same type. If one file covers several evidence types, select all applicable types above.",
             )
             with st.form("doc_metadata"):
-                comments = st.text_area("Comments")
+                comments = st.text_area("Comments", key=comments_widget_key)
                 if st.form_submit_button("Save uploaded evidence"):
                     if not uploaded_files:
                         st.error("Select at least one file before saving evidence.")
@@ -1137,6 +1306,7 @@ def page_documents() -> None:
                                 )
                                 created_ids.append(doc_id)
                         st.success(f"Evidence uploaded. Created {len(created_ids)} evidence record(s): {', '.join(map(str, created_ids))}.")
+                        st.session_state[reset_key] += 1
                         rerun()
         else:
             st.info("Upload is disabled for the current role/EUC relationship.")
