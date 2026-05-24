@@ -1246,14 +1246,21 @@ def page_documents() -> None:
     with col_upload:
         st.subheader("Upload evidence")
         if svc.can_upload_evidence(role, username, euc) and require_write_access():
-            # Use a nonce in widget keys so the selected artifact types and uploaded files
-            # are cleared immediately after a successful upload submission.
-            reset_key = "doc_upload_reset_nonce"
+            # Use an EUC-specific nonce in widget and form keys so selected
+            # artifact types, uploaded files and comments are cleared immediately
+            # after a successful upload. File uploader widgets are only reliably
+            # reset in Streamlit when their key changes.
+            reset_key = f"doc_upload_reset_nonce_{euc['euc_id']}"
             st.session_state.setdefault(reset_key, 0)
             upload_nonce = st.session_state[reset_key]
             type_widget_key = f"doc_upload_types_{euc['euc_id']}_{upload_nonce}"
             file_widget_key = f"doc_upload_files_{euc['euc_id']}_{upload_nonce}"
             comments_widget_key = f"doc_upload_comments_{euc['euc_id']}_{upload_nonce}"
+            upload_form_key = f"doc_metadata_{euc['euc_id']}_{upload_nonce}"
+
+            last_msg_key = f"doc_upload_last_message_{euc['euc_id']}"
+            if st.session_state.get(last_msg_key):
+                st.success(st.session_state.pop(last_msg_key))
 
             selected_types = st.multiselect(
                 "Document type(s) covered by the upload",
@@ -1275,7 +1282,19 @@ def page_documents() -> None:
                 key=file_widget_key,
                 help="You may upload multiple documents for the same type. If one file covers several evidence types, select all applicable types above.",
             )
-            with st.form("doc_metadata"):
+            if selected_types and uploaded_files:
+                st.caption(
+                    f"This submission will create **{len(selected_types) * len(uploaded_files)}** evidence record(s): "
+                    f"{len(uploaded_files)} file(s) × {len(selected_types)} document type(s)."
+                )
+
+            clear_col, _ = st.columns([1, 2])
+            with clear_col:
+                if st.button("Clear selected files/types", key=f"clear_upload_selection_{euc['euc_id']}_{upload_nonce}"):
+                    st.session_state[reset_key] += 1
+                    rerun()
+
+            with st.form(upload_form_key, clear_on_submit=False):
                 comments = st.text_area("Comments", key=comments_widget_key)
                 if st.form_submit_button("Save uploaded evidence"):
                     if not uploaded_files:
@@ -1284,8 +1303,10 @@ def page_documents() -> None:
                         st.error("Select at least one document type covered by the uploaded file(s).")
                     else:
                         created_ids: list[int] = []
+                        upload_summary: dict[str, list[str]] = {}
                         for uploaded in uploaded_files:
                             file_name, file_path = svc.save_document_file(euc["euc_id"], uploaded.name, uploaded.getvalue())
+                            upload_summary[file_name] = list(selected_types)
                             for document_type in selected_types:
                                 doc_id = svc.create_document_record(
                                     {
@@ -1305,7 +1326,15 @@ def page_documents() -> None:
                                     username,
                                 )
                                 created_ids.append(doc_id)
-                        st.success(f"Evidence uploaded. Created {len(created_ids)} evidence record(s): {', '.join(map(str, created_ids))}.")
+                        summary_text = "; ".join(
+                            f"{file_name} → {', '.join(types)}" for file_name, types in upload_summary.items()
+                        )
+                        st.session_state[last_msg_key] = (
+                            f"Evidence uploaded. Created {len(created_ids)} evidence record(s): "
+                            f"{', '.join(map(str, created_ids))}. {summary_text}"
+                        )
+                        # Rotate all upload widget keys and rerun. This clears the
+                        # multi-select, file uploader and comments field after save.
                         st.session_state[reset_key] += 1
                         rerun()
         else:

@@ -218,3 +218,10 @@ The app will recreate schema/reference data on next launch. Demo EUC data is not
 - Sidebar menu buttons are shown only for roles that should access those pages. Direct page access is also guarded by the same role/page matrix.
 - Group IT Governance Administrator navigation is limited to platform/configuration, email-notification administration, and reports; it does not expose EUC registry, risk-assessment, evidence-upload, exception, incident, or material-change content workflows.
 - EUC Owner, Contributor, Data Validation, GCC, Approver, and Internal Audit / read-only users each receive a different workbench and navigation scope aligned with their responsibilities.
+
+## Patch 33 notes
+
+- The Option B role-based Workbench menu remains the stable navigation pattern.
+- Documents & Evidence Pack upload reset has been hardened: after saving evidence, the selected artifact types, uploaded files, and comments are cleared by rotating EUC-specific widget and form keys.
+- The evidence upload flow explicitly confirms the number of evidence records to be created when one file is mapped to several document types or several files are uploaded for the same type.
+- Uploaded file names now include microseconds and a short UUID segment to avoid overwriting files when multiple uploads have the same original filename.

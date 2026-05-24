@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import uuid
 from difflib import SequenceMatcher
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
@@ -1913,7 +1914,9 @@ def safe_filename(filename: str) -> str:
 def save_document_file(euc_id: int, original_name: str, file_bytes: bytes) -> tuple[str, str]:
     euc_folder = UPLOAD_PATH / f"euc_{euc_id}"
     euc_folder.mkdir(parents=True, exist_ok=True)
-    file_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{safe_filename(original_name)}"
+    # Include microseconds and a short UUID segment so simultaneous uploads with
+    # the same original filename never overwrite each other.
+    file_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}_{uuid.uuid4().hex[:8]}_{safe_filename(original_name)}"
     file_path = euc_folder / file_name
     with open(file_path, "wb") as fh:
         fh.write(file_bytes)
