@@ -243,3 +243,8 @@ All user-facing tabular views now use `streamlit-aggrid` where available. Each t
 - Column widths now use minimum readable widths and horizontal scrolling, rather than compressing all columns into the viewport.
 - Long text cells wrap and show tooltips, so users can read full wording without relying on abbreviated column names.
 - Existing in-table filters, no-rerun filtering behavior, Option B role-based menu, and evidence-upload reset behavior are preserved.
+
+### Patch 38 notes
+- Fixed assessment review detail sections that could render as blank AgGrid areas after the global table readability change.
+- Operational/list/report tables continue to use AgGrid with in-table filters and no rerun while typing filters.
+- Compact assessment detail sections now use native Streamlit tables for reliable display of baseline controls and required action/rationale.

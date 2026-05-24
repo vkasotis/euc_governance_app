@@ -441,6 +441,25 @@ def safe_df(df: pd.DataFrame, height: int | str | None = None, *, key: str | Non
     st.dataframe(display_df, **kwargs)
 
 
+
+def detail_df(df: pd.DataFrame, height: int | str | None = None) -> None:
+    """Render small detail/summary tables with Streamlit native rendering.
+
+    AgGrid is used for operational list/report tables. For compact detail panels
+    such as assessment review sections, native rendering is more reliable and
+    avoids blank iframe-like areas in embedded sections while preserving full
+    wording and valid height handling.
+    """
+    if df is None or df.empty:
+        st.info("No records found for the current filters.")
+        return
+    kwargs: dict[str, Any] = {"use_container_width": True, "hide_index": True}
+    if isinstance(height, int) and height > 0:
+        kwargs["height"] = height
+    elif isinstance(height, str) and height == "auto":
+        kwargs["height"] = "auto"
+    st.dataframe(df, **kwargs)
+
 def selectable_df(
     df: pd.DataFrame,
     *,
@@ -711,7 +730,7 @@ def record_table(record: dict[str, Any], fields: list[str | tuple[str, str]], *,
         rows.append({"Field": label, "Value": display_value(record.get(key))})
     if title:
         st.markdown(f"#### {title}")
-    safe_df(pd.DataFrame(rows), key=f"record_table_{abs(hash(str(rows))) % 100000}")
+    detail_df(pd.DataFrame(rows), height="auto")
 
 
 def assessment_review_card(assessment: dict[str, Any]) -> None:
@@ -758,7 +777,7 @@ def assessment_review_card(assessment: dict[str, Any]) -> None:
             },
         ]
     )
-    safe_df(dimensions, height=180, key=f"assessment_dimensions_{assessment.get('assessment_id', 'new')}")
+    detail_df(dimensions, height=180)
 
     st.markdown("##### Baseline controls")
     effective_reg_status = svc.effective_registration_control_status(assessment)
@@ -778,7 +797,7 @@ def assessment_review_card(assessment: dict[str, Any]) -> None:
             {"Control": "Resilience", "Selected status": display_value(assessment.get("control_resilience")), "Effective status": display_value(assessment.get("control_resilience"))},
         ]
     )
-    safe_df(controls, height=300, key=f"assessment_controls_{assessment.get('assessment_id', 'new')}")
+    detail_df(controls, height=340)
 
     st.markdown("##### Required action and rationale")
     record_table(
