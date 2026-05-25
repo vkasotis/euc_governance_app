@@ -282,3 +282,9 @@ All user-facing tabular views now use `streamlit-aggrid` where available. Each t
 - Review Evidence wording has been clarified so it applies only to review, approval, challenge and closure-validation activities, not every task/request.
 - Tasks & Remediation now shows a `what_user_should_do` column and an action guidance panel for the selected task.
 - Guidance is derived from task type and, where relevant, the referenced artifact/document type.
+
+## Patch 45 notes
+
+- Fixed Tasks & Remediation startup/runtime safety where `app.py` could call `task_user_action_guidance` while Streamlit Cloud was still running an older `services.py`.
+- Added a defensive app-level fallback for task action guidance so the page does not crash if source files are deployed out of sync.
+- No business workflow, risk-assessment, inventory, evidence, menu, RACI, or reporting logic was changed.

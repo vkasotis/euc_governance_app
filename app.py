@@ -257,6 +257,47 @@ def require_write_access() -> bool:
     return True
 
 
+
+
+def task_user_action_guidance_safe(task: Any) -> str:
+    """Return task-action guidance without hard-failing on mismatched services.py.
+
+    Streamlit Cloud deployments can occasionally run a newer app.py against an
+    older services.py if the full package was not committed together. The main
+    implementation lives in services.task_user_action_guidance, but this wrapper
+    preserves startup/runtime safety and provides a conservative fallback.
+    """
+    service_fn = getattr(svc, "task_user_action_guidance", None)
+    if callable(service_fn):
+        try:
+            return str(service_fn(task))
+        except Exception:
+            pass
+    if isinstance(task, pd.Series):
+        row = task.to_dict()
+    else:
+        row = dict(task or {})
+    task_type = str(row.get("task_type") or "").strip()
+    title = str(row.get("title") or "").strip().lower()
+    description = str(row.get("description") or "").strip().lower()
+    text = f"{title} {description}"
+    if task_type in {"Risk assessment", "Reassessment"}:
+        return "Go to the Risk Assessment page, complete or amend the assessment, and submit it. Do not upload a separate risk-assessment file."
+    if task_type in {"Document submission", "Missing evidence", "Documentation refresh"}:
+        return "Go to Documents & Evidence Pack, review the Required Artifact Checklist, and upload or refresh the specific missing/rejected/expired artifact for this EUC."
+    if task_type == "Remediation":
+        return "Review the related finding or reviewer comment, fix the control/data/documentation gap, upload closure evidence where needed, and update the task."
+    if task_type == "Review response":
+        if "exception" in text:
+            return "Review the exception request and supporting evidence. Approvers should approve/reject in the Exceptions page; owners should address comments if returned."
+        return "Review the GCC/Data Validation comments, respond to each point, upload any requested evidence, and update the task response."
+    if task_type == "Closure evidence":
+        return "Upload evidence proving the remediation/action is complete, record the evidence document ID if applicable, and provide a closure reason."
+    if task_type == "Registration completion":
+        return "Complete the EUC registration fields, including ownership, business unit, BCBS 239 mapping/scope indicators, schedule/cut-off, storage and dependency details."
+    return "Review the task title and description, complete the requested action, upload supporting evidence only where required, and update the task status/closure response."
+
+
 def badge(value: Any) -> str:
     if value is None or value == "":
         return "—"
@@ -2051,7 +2092,7 @@ def page_tasks() -> None:
 
     if not tasks.empty:
         tasks = tasks.copy()
-        tasks["what_user_should_do"] = tasks.apply(svc.task_user_action_guidance, axis=1)
+        tasks["what_user_should_do"] = tasks.apply(task_user_action_guidance_safe, axis=1)
 
     display_cols = [
         "task_id", "reference_id", "euc_name", "task_type", "title", "what_user_should_do", "assigned_to",
@@ -2066,7 +2107,7 @@ def page_tasks() -> None:
     task_map = {f"{row['task_id']} — {row['title']}": int(row["task_id"]) for _, row in tasks.iterrows()}
     chosen = st.selectbox("Task", list(task_map.keys()))
     selected_task = tasks[tasks["task_id"] == task_map[chosen]].iloc[0].to_dict()
-    st.info(f"What the user should do: {svc.task_user_action_guidance(selected_task)}")
+    st.info(f"What the user should do: {task_user_action_guidance_safe(selected_task)}")
     with st.form("update_task"):
         c1, c2, c3 = st.columns(3)
         status = c1.selectbox("Status", TASK_STATUSES, index=option_index(TASK_STATUSES, selected_task.get("status")))
