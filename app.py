@@ -6,6 +6,7 @@ import base64
 import html
 import inspect
 import mimetypes
+import re
 import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
