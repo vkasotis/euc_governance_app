@@ -101,8 +101,8 @@ ARTIFACT_UPLOAD_GUIDANCE = {
     "UAT Evidence": "UAT plan, scenarios, data used, steps, results, issues, conclusions and formal user/head-of-unit sign-off.",
     "Approval Evidence": "Approval email, workflow/ticket sign-off, Head of Unit approval, Senior Management approval or committee escalation evidence, depending on risk.",
     "Access Review Evidence": "Named user/role access list, RBAC/RLS evidence, access review sign-off, leaver/role-change revocation evidence and distribution list control.",
-    "Independent / Periodic Review Evidence": "Dated independent/four-eye or periodic review checklist/email showing scope, reviewer, conclusion, issues and actions.",
-    "Review Evidence": "Dated governance/reviewer sign-off showing the EUC, scope reviewed, conclusion, deficiencies and remediation actions.",
+    "Independent / Periodic Review Evidence": "Dated independent/four-eye or periodic review checklist, workflow record or email confirmation identifying the EUC, review/run scope, checks performed, issues identified, reviewer conclusion and remediation actions where applicable.",
+    "Review Evidence": "Upload dated review evidence, such as a checklist, workflow record, email confirmation or governance sign-off, identifying the EUC, review/run scope, checks performed, issues identified, reviewer conclusion and remediation actions where applicable. This applies to review, approval, challenge and closure-validation activities; it is not a generic requirement for every task.",
     "Reconciliation Evidence": "Reconciliations to authoritative sources or benchmarks, control totals, variance thresholds, explained deltas and reviewer sign-off.",
     "Resilience Evidence": "Backup verification, restore drill or equivalent, BCP/fallback steps, deputy-cover evidence and SPOF mitigation.",
     "Evidence Pack Index": "Index mapping each required artifact/control/CACRT dimension to document IDs, repository paths, evidence owners and retention references.",
@@ -121,8 +121,93 @@ ARTIFACT_UPLOAD_GUIDANCE = {
 def artifact_upload_guidance(document_type: str) -> str:
     return ARTIFACT_UPLOAD_GUIDANCE.get(
         document_type,
-        "Upload evidence sufficient for the reviewer to verify the requirement, control operation, owner, date, scope and conclusion.",
+        "Upload evidence sufficient for the reviewer to verify the specific requirement, control operation, owner, date, scope and conclusion.",
     )
+
+
+def artifact_user_action(document_type: str, status: str | None = None) -> str:
+    """Return action-oriented guidance for a checklist artifact.
+
+    The app must not make Review Evidence look like a universal requirement.
+    Each artifact type receives targeted instructions, while the status controls
+    whether the owner should act now, wait for review, or no longer needs to act.
+    """
+    doc_type = str(document_type or "").strip()
+    normalized_status = str(status or "Missing").strip() or "Missing"
+    if doc_type == "Risk Assessment":
+        base = "Complete or update the Risk Assessment module for this EUC. Do not upload a separate risk-assessment file. The assessment remains Submitted until GCC/Data Validation accepts or rejects it."
+    else:
+        base = artifact_upload_guidance(doc_type)
+
+    if normalized_status == "Accepted":
+        return f"No current owner action for this artifact. Accepted evidence is already on file. Evidence expectation: {base}"
+    if normalized_status == "Submitted":
+        return f"Evidence has been submitted and is awaiting reviewer action. Monitor review comments; replace or supplement evidence only if GCC/Data Validation rejects it. Evidence expectation: {base}"
+    if normalized_status == "Rejected":
+        return f"Replace or correct the rejected evidence and resubmit it under this document type. Address the reviewer comments/deficiency tag before resubmission. Evidence expectation: {base}"
+    if normalized_status == "Expired":
+        return f"Upload a refreshed/current version of this evidence and submit it for review. Evidence expectation: {base}"
+    if normalized_status == "Superseded":
+        return f"Confirm the superseding evidence is uploaded and accepted. Upload a current replacement if no accepted replacement exists. Evidence expectation: {base}"
+    if normalized_status == "Pending":
+        return f"Submit the required evidence for reviewer assessment. Evidence expectation: {base}"
+    return f"Provide this missing mandatory artifact. Evidence expectation: {base}"
+
+
+def _extract_artifact_from_task(title: str | None, description: str | None = None) -> str | None:
+    """Infer a document type from task wording when one is present."""
+    text = f"{title or ''} {description or ''}".strip()
+    for prefix, suffix in [
+        ("Provide mandatory ", ""),
+        ("Replace rejected ", " evidence"),
+        ("Upload ", " evidence"),
+    ]:
+        if prefix in text:
+            candidate = text.split(prefix, 1)[1]
+            if suffix and suffix in candidate:
+                candidate = candidate.split(suffix, 1)[0]
+            candidate = candidate.split(".", 1)[0].split(";", 1)[0].strip()
+            if candidate in ARTIFACT_UPLOAD_GUIDANCE or candidate == "Risk Assessment":
+                return candidate
+    for doc_type in sorted(ARTIFACT_UPLOAD_GUIDANCE, key=len, reverse=True):
+        if doc_type.lower() in text.lower():
+            return doc_type
+    return None
+
+
+def task_user_action_guidance(task: dict[str, Any] | pd.Series) -> str:
+    """Return task-specific instructions for Tasks & Remediation.
+
+    Guidance is based on the task type and, where possible, the document/artifact
+    referenced by the title or description. This prevents review-signoff wording
+    from being reused for unrelated requests.
+    """
+    if isinstance(task, pd.Series):
+        row = task.to_dict()
+    else:
+        row = dict(task or {})
+    task_type = str(row.get("task_type") or "").strip()
+    title = str(row.get("title") or "").strip()
+    description = str(row.get("description") or "").strip()
+    artifact = _extract_artifact_from_task(title, description)
+
+    if task_type in {"Risk assessment", "Reassessment"}:
+        return "Go to the Risk Assessment page for this EUC, complete or amend the assessment, and submit it. No separate risk-assessment file should be uploaded."
+    if task_type in {"Document submission", "Missing evidence", "Documentation refresh"}:
+        if artifact:
+            return f"Go to Documents & Evidence Pack and upload/refresh `{artifact}` for this EUC. {artifact_user_action(artifact, 'Missing')}"
+        return "Go to Documents & Evidence Pack, review the Required Artifact Checklist, and upload or refresh the specific missing/rejected/expired artifact shown for this EUC."
+    if task_type == "Remediation":
+        return "Review the related finding, residual-risk issue, or reviewer comment; remediate the control/data/documentation gap; upload closure evidence where needed; then update the task with the closure response and evidence document ID."
+    if task_type == "Review response":
+        if "exception" in title.lower() or "exception" in description.lower():
+            return "Review the exception request and supporting evidence. Approvers should approve/reject in the Exceptions page; owners should address comments or provide additional evidence if returned."
+        return "Review the GCC/Data Validation outcome or challenge comments, respond to each point, upload any requested supporting evidence, and update the task with your response."
+    if task_type == "Closure evidence":
+        return "Upload evidence proving the remediation/action is complete, record the evidence document ID on this task, and provide a closure reason/request."
+    if task_type == "Registration completion":
+        return "Complete the EUC registration fields, including owner/reviewer, business unit, BCBS 239 mapping/scope indicators, schedule/cut-off, storage and dependency details."
+    return "Review the task title and description, complete the requested action, upload supporting evidence only if the task requires evidence, and update the task status/closure response."
 
 
 def _default_email(username: str) -> str:
@@ -2391,6 +2476,7 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
                 "cacrt_dimension": req.get("cacrt_dimension"),
                 "requirement_reason": req.get("requirement_reason"),
                 "what_to_upload": artifact_upload_guidance(doc_type),
+                "what_user_should_do": artifact_user_action(doc_type, status),
                 "status": status,
                 "document_id": document_id,
                 "assessment_id": assessment_id,

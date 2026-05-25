@@ -275,3 +275,10 @@ All user-facing tabular views now use `streamlit-aggrid` where available. Each t
 - Fixed an AgGrid startup/runtime error in EUC Detail View and other joined tables when a dataframe contains duplicate column names.
 - The grid helper now deduplicates display column names before rendering and tolerates Pandas returning a DataFrame instead of a Series during column-width estimation.
 - No business logic, permissions, risk assessment logic, evidence handling, RACI notifications, or inventory field mappings were changed in this patch.
+
+## Patch 44 notes
+
+- Required Artifact Checklist now includes task-specific/action-specific `what_user_should_do` guidance in addition to `what_to_upload` evidence-content guidance.
+- Review Evidence wording has been clarified so it applies only to review, approval, challenge and closure-validation activities, not every task/request.
+- Tasks & Remediation now shows a `what_user_should_do` column and an action guidance panel for the selected task.
+- Guidance is derived from task type and, where relevant, the referenced artifact/document type.

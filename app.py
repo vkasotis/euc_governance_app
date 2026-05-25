@@ -1833,7 +1833,7 @@ def page_documents() -> None:
     # Synchronize documentation completeness/lifecycle before showing the checklist.
     svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
     checklist = svc.artifact_checklist(euc["euc_id"])
-    st.caption("Use the what_to_upload column to understand exactly what evidence is expected for each requirement. Filter directly inside the table using the column filter boxes.")
+    st.caption("Use `what_user_should_do` for action guidance and `what_to_upload` for evidence content expectations. Filter directly inside the table using the column filter boxes.")
     safe_df(checklist, height=300, key=f"documents_required_artifacts_{euc['euc_id']}")
 
     st.subheader("Completed risk assessments used as internal evidence")
@@ -2006,7 +2006,7 @@ def page_checklist() -> None:
     )
     st.caption("Checklist baseline follows Overall Inherent Risk / BCBS 239 materiality. Residual risk is used for remediation, escalation and exception handling.")
     checklist = svc.artifact_checklist(euc["euc_id"])
-    st.caption("Filter directly inside the table using the column filter boxes.")
+    st.caption("Use `what_user_should_do` for action guidance and `what_to_upload` for evidence content expectations. Filter directly inside the table using the column filter boxes.")
     safe_df(checklist, height=350, key=f"standalone_required_artifacts_{euc['euc_id']}")
     c1, c2 = st.columns(2)
     if c1.button("Recalculate completeness"):
@@ -2049,8 +2049,12 @@ def page_tasks() -> None:
     if chosen_euc != "All my accessible tasks":
         tasks = tasks[tasks["euc_id"] == euc_lookup[chosen_euc]]
 
+    if not tasks.empty:
+        tasks = tasks.copy()
+        tasks["what_user_should_do"] = tasks.apply(svc.task_user_action_guidance, axis=1)
+
     display_cols = [
-        "task_id", "reference_id", "euc_name", "task_type", "title", "assigned_to",
+        "task_id", "reference_id", "euc_name", "task_type", "title", "what_user_should_do", "assigned_to",
         "assigned_full_name", "assigned_email", "assigned_role", "due_date", "priority", "status", "overdue"
     ]
     safe_df(tasks[[c for c in display_cols if c in tasks.columns]], height=420)
@@ -2062,6 +2066,7 @@ def page_tasks() -> None:
     task_map = {f"{row['task_id']} — {row['title']}": int(row["task_id"]) for _, row in tasks.iterrows()}
     chosen = st.selectbox("Task", list(task_map.keys()))
     selected_task = tasks[tasks["task_id"] == task_map[chosen]].iloc[0].to_dict()
+    st.info(f"What the user should do: {svc.task_user_action_guidance(selected_task)}")
     with st.form("update_task"):
         c1, c2, c3 = st.columns(3)
         status = c1.selectbox("Status", TASK_STATUSES, index=option_index(TASK_STATUSES, selected_task.get("status")))
