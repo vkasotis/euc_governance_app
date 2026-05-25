@@ -315,14 +315,27 @@ def _labelize_column(column: Any) -> str:
     return " ".join(rendered)
 
 
-def _estimate_grid_column_width(series: pd.Series, header: str) -> int:
-    """Estimate a readable AgGrid width while still allowing horizontal scroll."""
+def _estimate_grid_column_width(series: Any, header: str) -> int:
+    """Estimate a readable AgGrid width while tolerating duplicate columns.
+
+    Pandas returns a DataFrame rather than a Series when a dataframe contains
+    duplicate column names and is accessed as df[column]. This helper must not
+    assume a Series, because joined reporting/asset datasets can occasionally
+    contain duplicate names after migrations or user-defined custom reports.
+    """
+    name = str(header or "").lower()
     try:
-        sample = series.dropna().astype(str).head(50).tolist()
+        if isinstance(series, pd.DataFrame):
+            sample_values: list[str] = []
+            for col in series.columns[:3]:
+                sample_values.extend(series[col].dropna().astype(str).head(20).tolist())
+            sample = sample_values[:50]
+        else:
+            sample = series.dropna().astype(str).head(50).tolist()
+            name = str(getattr(series, "name", header) or header).lower()
     except Exception:
         sample = []
     longest_value = max([len(str(header)), *[len(v) for v in sample]], default=len(str(header)))
-    name = str(series.name).lower()
 
     if name.endswith("_id") or name in {"id", "version", "mandatory", "active", "active_flag"}:
         return max(95, min(150, 18 + longest_value * 7))
@@ -333,6 +346,34 @@ def _estimate_grid_column_width(series: pd.Series, header: str) -> int:
     if any(token in name for token in ["date", "at", "due", "expiry", "review"]):
         return max(140, min(210, 28 + longest_value * 7))
     return max(160, min(360, 28 + longest_value * 7))
+
+
+def _deduplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a dataframe with unique column names for AgGrid.
+
+    AgGrid and Pandas column lookups are more predictable when every column name
+    is unique. Duplicate names are preserved with a numbered suffix for display
+    rather than causing runtime failures in grid configuration.
+    """
+    if df is None or df.empty:
+        return df
+    seen: dict[str, int] = {}
+    columns: list[str] = []
+    changed = False
+    for col in df.columns:
+        base = str(col)
+        count = seen.get(base, 0)
+        if count:
+            columns.append(f"{base}_{count + 1}")
+            changed = True
+        else:
+            columns.append(base)
+        seen[base] = count + 1
+    if not changed:
+        return df
+    out = df.copy()
+    out.columns = columns
+    return out
 
 
 def _build_grid_options(
@@ -424,7 +465,7 @@ def safe_df(df: pd.DataFrame, height: int | str | None = None, *, key: str | Non
         st.info("No records found for the current filters.")
         return
 
-    display_df = df.copy()
+    display_df = _deduplicate_columns(df.copy())
     if AGGRID_AVAILABLE:
         AgGrid(
             display_df,
@@ -478,7 +519,7 @@ def selectable_df(
         st.info("No records found for the current filters.")
         return []
 
-    display_df = df.copy()
+    display_df = _deduplicate_columns(df.copy())
     if not AGGRID_AVAILABLE:
         safe_df(display_df, height=height, key=key)
         return []

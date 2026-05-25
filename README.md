@@ -269,3 +269,9 @@ All user-facing tabular views now use `streamlit-aggrid` where available. Each t
 - Components / Assets has been expanded into the full EUC Asset Inventory child form linked to the parent EUC by `euc_id`. Parent Business Unit, Application and Reference ID are shown as read-only context.
 - Asset fields now cover RRF Report/KRI/Model mapping, operationalization link, asset/file name, file description, technology, controlled storage type/location, inputs, cut-off, processing schedule, execution frequency, CDE mappings, outputs, automation level, backup/recovery, SPOF risk, modification date and review date.
 - Existing confirmed behavior is preserved: Option B role-based menu, AgGrid no-rerun filters and readability, risk assessment workflow, evidence upload reset, multi-file/multi-type evidence upload, user directory, RACI notifications, reports, no automatic operational-data reseeding, and Group IT/admin content restrictions.
+
+## Patch 43 notes
+
+- Fixed an AgGrid startup/runtime error in EUC Detail View and other joined tables when a dataframe contains duplicate column names.
+- The grid helper now deduplicates display column names before rendering and tolerates Pandas returning a DataFrame instead of a Series during column-width estimation.
+- No business logic, permissions, risk assessment logic, evidence handling, RACI notifications, or inventory field mappings were changed in this patch.
