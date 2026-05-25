@@ -687,6 +687,37 @@ def option_index(options: list[str], value: str | None, default: int = 0) -> int
         return options.index(value)
     return default
 
+
+WORKING_DAY_OPTIONS = list(range(1, 91))
+
+def _working_day_index(value: Any, default: int = 0) -> int:
+    """Return a selectbox index for a stored working-day value."""
+    if value is None:
+        return default
+    match = re.search(r"\d+", str(value))
+    if not match:
+        return default
+    try:
+        number = int(match.group(0))
+    except ValueError:
+        return default
+    if 1 <= number <= 90:
+        return number - 1
+    return default
+
+
+def working_day_selectbox(label: str, value: Any = None, *, key: str | None = None, help: str | None = None) -> str:
+    """Select a business-working-day number and store it in a readable form."""
+    selected = st.selectbox(
+        label,
+        WORKING_DAY_OPTIONS,
+        index=_working_day_index(value),
+        format_func=lambda day: f"Working day {day}",
+        help=help,
+        key=key,
+    )
+    return f"Working day {selected}"
+
 def bcbs_output_selectbox(label: str, value: str | None = None, key: str | None = None) -> str:
     """Controlled selector for primary BCBS 239 output mapping."""
     options = [""] + svc.bcbs239_output_options(active_only=True)
@@ -1106,15 +1137,34 @@ def page_register() -> None:
         business_unit = c2.text_input("Business unit *", value="Risk Management")
         technology_type = c1.selectbox("Technology type *", TECHNOLOGY_TYPES)
         storage_location = c2.text_input("Storage location *", value="//eurobank/euc/")
-        description = st.text_area("Description")
-        purpose = st.text_area("Purpose")
+        description = st.text_area(
+            "Description",
+            help="Briefly describe what the EUC is: file, tool, workflow, script, workbook, report, or process.",
+        )
+        purpose = st.text_area(
+            "Purpose",
+            help="Describe what the EUC is used for and what output it produces or supports.",
+        )
 
         st.subheader("Mapping and operating context")
         c3, c4, c5 = st.columns(3)
-        frequency = c3.selectbox("Frequency", FREQUENCIES)
-        schedule = c4.text_input("Execution schedule")
-        cut_off = c5.text_input("Cut-off")
-        business_context = st.text_area("Business context")
+        frequency = c3.selectbox("Frequency", FREQUENCIES, help="How often the EUC is executed, such as weekly, monthly, quarterly or ad hoc.")
+        with c4:
+            schedule = working_day_selectbox(
+                "Execution schedule (working day)",
+                help="Business working day on which the EUC should normally be executed, e.g. Working day 8.",
+                key="register_execution_schedule_wd",
+            )
+        with c5:
+            cut_off = working_day_selectbox(
+                "Cut-off / delivery working day",
+                help="Latest business working day by which the input, execution or output delivery must be completed.",
+                key="register_cutoff_wd",
+            )
+        business_context = st.text_area(
+            "Business / reporting context",
+            help="Explain why this EUC matters in the business or reporting process, including downstream reports, decisions, controls or BCBS 239 relevance.",
+        )
         bcbs_mapping = bcbs_output_selectbox("BCBS 239 output mapping *", key="register_bcbs239_output")
         cde_linkage = st.text_area("CDE linkage (optional)")
         inputs = st.text_area("Inputs")
@@ -1191,8 +1241,8 @@ def page_detail() -> None:
                 "technology_type",
                 "storage_location",
                 "frequency",
-                "schedule",
-                "cut_off",
+                ("Execution schedule (working day)", "schedule"),
+                ("Cut-off / delivery working day", "cut_off"),
                 ("SPOF indicator", "spof_indicator"),
                 "next_review_date",
             ],
@@ -1210,11 +1260,35 @@ def page_detail() -> None:
                     lifecycle = st.selectbox("Lifecycle status", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, euc.get("lifecycle_status")))
                     overall = st.selectbox("Overall status", OVERALL_STATUSES, index=option_index(OVERALL_STATUSES, euc.get("overall_status")))
                     next_review = st.date_input("Next review date", value=pd.to_datetime(euc.get("next_review_date") or date.today()).date())
-                    description = st.text_area("Description", value=euc.get("description") or "")
-                    purpose = st.text_area("Purpose", value=euc.get("purpose") or "")
+                    c_sched1, c_sched2, c_sched3 = st.columns(3)
+                    frequency = c_sched1.selectbox("Frequency", FREQUENCIES, index=option_index(FREQUENCIES, euc.get("frequency")), help="How often the EUC is executed.")
+                    with c_sched2:
+                        schedule = working_day_selectbox(
+                            "Execution schedule (working day)",
+                            euc.get("schedule"),
+                            key=f"edit_execution_schedule_wd_{euc['euc_id']}",
+                            help="Business working day on which the EUC should normally be executed.",
+                        )
+                    with c_sched3:
+                        cut_off = working_day_selectbox(
+                            "Cut-off / delivery working day",
+                            euc.get("cut_off"),
+                            key=f"edit_cutoff_wd_{euc['euc_id']}",
+                            help="Latest business working day by which the EUC input, execution or output delivery must be completed.",
+                        )
+                    description = st.text_area(
+                        "Description",
+                        value=euc.get("description") or "",
+                        help="Briefly describe what the EUC is: file, tool, workflow, script, workbook, report, or process.",
+                    )
+                    purpose = st.text_area(
+                        "Purpose",
+                        value=euc.get("purpose") or "",
+                        help="Describe what the EUC is used for and what output it produces or supports.",
+                    )
                     if st.form_submit_button("Save changes"):
                         payload = dict(euc)
-                        payload.update({"name": name, "owner": owner, "owner_delegate": delegate, "business_unit": unit, "technology_type": tech, "storage_location": storage, "lifecycle_status": lifecycle, "overall_status": overall, "next_review_date": next_review.isoformat(), "description": description, "purpose": purpose})
+                        payload.update({"name": name, "owner": owner, "owner_delegate": delegate, "business_unit": unit, "technology_type": tech, "storage_location": storage, "lifecycle_status": lifecycle, "overall_status": overall, "next_review_date": next_review.isoformat(), "frequency": frequency, "schedule": schedule, "cut_off": cut_off, "description": description, "purpose": purpose})
                         try:
                             svc.update_euc(euc["euc_id"], payload, username)
                             st.success("EUC updated.")
@@ -1225,7 +1299,7 @@ def page_detail() -> None:
         record_table(
             euc,
             [
-                "business_context",
+                ("Business / reporting context", "business_context"),
                 ("BCBS 239 output mapping", "bcbs239_output_mapping"),
                 ("CDE linkage", "cde_linkage"),
                 "inputs",
@@ -1240,7 +1314,11 @@ def page_detail() -> None:
             with st.expander("Edit mapping fields"):
                 with st.form("edit_mapping"):
                     payload = dict(euc)
-                    payload["business_context"] = st.text_area("Business context", value=euc.get("business_context") or "")
+                    payload["business_context"] = st.text_area(
+                        "Business / reporting context",
+                        value=euc.get("business_context") or "",
+                        help="Explain why this EUC matters in the business or reporting process, including downstream reports, decisions, controls or BCBS 239 relevance.",
+                    )
                     payload["bcbs239_output_mapping"] = bcbs_output_selectbox("BCBS 239 output mapping *", euc.get("bcbs239_output_mapping"), key="detail_bcbs239_output")
                     for field in ["cde_linkage", "inputs", "outputs", "recipients", "dependencies", "mapping_na_justification"]:
                         payload[field] = st.text_area(field.replace("_", " ").title(), value=euc.get(field) or "")

@@ -248,3 +248,12 @@ All user-facing tabular views now use `streamlit-aggrid` where available. Each t
 - Fixed assessment review detail sections that could render as blank AgGrid areas after the global table readability change.
 - Operational/list/report tables continue to use AgGrid with in-table filters and no rerun while typing filters.
 - Compact assessment detail sections now use native Streamlit tables for reliable display of baseline controls and required action/rationale.
+
+## Latest registration field clarification
+
+- **Frequency** captures how often the EUC is executed, for example Daily, Weekly, Monthly, Quarterly, Ad hoc, or Event-driven.
+- **Execution schedule (working day)** is now a controlled dropdown from Working day 1 to Working day 90. It captures the business working day on which the EUC is normally executed, for example Working day 8.
+- **Cut-off / delivery working day** is also a controlled dropdown from Working day 1 to Working day 90. It captures the latest business working day by which inputs, execution, or output delivery must be completed.
+- **Description** explains what the EUC is.
+- **Purpose** explains what the EUC is used for and what it produces or supports.
+- **Business / reporting context** explains why the EUC matters in the wider business, reporting, control, or BCBS 239 process.
