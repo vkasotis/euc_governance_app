@@ -28,35 +28,35 @@ except Exception:  # pragma: no cover - fallback if dependency is not installed 
 
 import services as svc
 from db import DATABASE_FILE, init_db, table_count
-from schema import (
-    APP_TITLE,
-    BANK_NAME,
-    APPROVAL_STATUSES,
-    BCBS239_OUTPUT_TYPES,
-    BUSINESS_UNITS,
-    CACRT_DIMENSIONS,
-    CHANGE_TYPES,
-    CONTROL_AREAS,
-    CONTROLLED_STORAGE_TYPES,
-    DIRECTORY_ROLES,
-    DOCUMENT_STATUSES,
-    DOCUMENT_TYPES,
-    FINDING_SEVERITIES,
-    FREQUENCIES,
-    INCIDENT_STATUSES,
-    LEGAL_ENTITIES,
-    LEVELS_OF_AUTOMATION,
-    LIFECYCLE_STATUSES,
-    OVERALL_STATUSES,
-    PRIORITIES,
-    REVIEW_OUTCOMES,
-    REVIEW_TYPES,
-    RISK_LEVELS,
-    ROLES,
-    TASK_STATUSES,
-    TASK_TYPES,
-    TECHNOLOGY_TYPES,
-)
+import schema as app_schema
+
+APP_TITLE = getattr(app_schema, "APP_TITLE", "End-to-End EUC Governance Monitoring App")
+BANK_NAME = getattr(app_schema, "BANK_NAME", "Eurobank S.A.")
+APPROVAL_STATUSES = getattr(app_schema, "APPROVAL_STATUSES", ["Pending", "Approved", "Rejected", "Expired", "Withdrawn"])
+BCBS239_OUTPUT_TYPES = getattr(app_schema, "BCBS239_OUTPUT_TYPES", ["Material Report", "Material KRI", "Material Model"])
+BUSINESS_UNITS = getattr(app_schema, "BUSINESS_UNITS", ["Risk Management", "Finance", "Treasury", "Retail Banking", "Corporate Banking", "Group Finance", "Group Risk", "Operations", "Compliance", "Other"])
+CACRT_DIMENSIONS = getattr(app_schema, "CACRT_DIMENSIONS", ["Completeness", "Accuracy", "Consistency", "Reasonableness", "Timeliness", "Traceability"])
+CHANGE_TYPES = getattr(app_schema, "CHANGE_TYPES", ["Logic", "Inputs", "Outputs", "Recipients", "Thresholds", "Security", "Storage", "Dependencies", "Platform", "Other"])
+CONTROL_AREAS = getattr(app_schema, "CONTROL_AREAS", ["Ownership & Accountability", "Inventory & Classification", "Data Inputs & Lineage", "Data Validation", "Change Management", "Access Control", "Operational Resilience", "Reconciliation & Controls", "Issue Management", "Decommissioning"])
+CONTROLLED_STORAGE_TYPES = getattr(app_schema, "CONTROLLED_STORAGE_TYPES", ["Controlled SharePoint", "Controlled Network Drive", "Document Management System", "Code Repository", "Database", "Other"])
+DIRECTORY_ROLES = getattr(app_schema, "DIRECTORY_ROLES", getattr(app_schema, "ROLES", []))
+DOCUMENT_STATUSES = getattr(app_schema, "DOCUMENT_STATUSES", ["Pending", "Submitted", "Accepted", "Rejected", "Expired", "Superseded", "Missing"])
+DOCUMENT_TYPES = getattr(app_schema, "DOCUMENT_TYPES", [])
+FINDING_SEVERITIES = getattr(app_schema, "FINDING_SEVERITIES", ["Low", "Medium", "High", "Critical"])
+FREQUENCIES = getattr(app_schema, "FREQUENCIES", ["Daily", "Weekly", "Monthly", "Quarterly", "Ad hoc", "Event-driven"])
+INCIDENT_STATUSES = getattr(app_schema, "INCIDENT_STATUSES", ["Open", "Contained", "RCA In Progress", "Remediation In Progress", "Closed"])
+LEGAL_ENTITIES = getattr(app_schema, "LEGAL_ENTITIES", ["Eurobank S.A.", "Eurobank Holdings", "Eurobank Cyprus", "Eurobank Bulgaria", "Eurobank Private Bank Luxembourg", "Other"])
+LEVELS_OF_AUTOMATION = getattr(app_schema, "LEVELS_OF_AUTOMATION", ["Manual", "Semi-automated", "Automated", "Scheduled automated", "Other"])
+LIFECYCLE_STATUSES = getattr(app_schema, "LIFECYCLE_STATUSES", [])
+OVERALL_STATUSES = getattr(app_schema, "OVERALL_STATUSES", [])
+PRIORITIES = getattr(app_schema, "PRIORITIES", ["Low", "Medium", "High", "Critical"])
+REVIEW_OUTCOMES = getattr(app_schema, "REVIEW_OUTCOMES", ["Accepted", "Accepted with comments", "Returned for remediation", "Finding raised"])
+REVIEW_TYPES = getattr(app_schema, "REVIEW_TYPES", ["Data Validation", "GCC Monitoring", "Closure Validation", "Periodic Review"])
+RISK_LEVELS = getattr(app_schema, "RISK_LEVELS", ["Low", "Medium", "High", "Very High"])
+ROLES = getattr(app_schema, "ROLES", ["EUC Owner", "EUC Owner Delegate / Contributor", "GCC", "Data Validation Unit", "Group IT Governance Administrator", "Approver / Head of Unit", "Internal Audit / Read-only User"])
+TASK_STATUSES = getattr(app_schema, "TASK_STATUSES", ["Open", "In Progress", "Blocked", "Closure Requested", "Closed", "Cancelled"])
+TASK_TYPES = getattr(app_schema, "TASK_TYPES", [])
+TECHNOLOGY_TYPES = getattr(app_schema, "TECHNOLOGY_TYPES", ["Excel", "Access", "Python script", "Notebook", "Report", "SQL script", "Manual process", "Other"])
 from seed_data import seed_database
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🏦", layout="wide")
