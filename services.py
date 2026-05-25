@@ -20,10 +20,15 @@ import pandas as pd
 from db import UPLOAD_PATH, dataframe, execute, fetch_all, fetch_one, insert_audit, utc_now
 from schema import (
     BCBS239_OUTPUTS,
+    BCBS239_OUTPUT_TYPES,
+    BUSINESS_UNITS,
     CACRT_DIMENSIONS,
     CONTROL_AREAS,
+    CONTROLLED_STORAGE_TYPES,
     DEFAULT_REQUIRED_ARTIFACTS,
     DOCUMENT_TYPES,
+    LEGAL_ENTITIES,
+    LEVELS_OF_AUTOMATION,
     LIFECYCLE_STATUSES,
     RACI_PARTIES,
     RACI_RULE_DEFINITIONS,
@@ -239,13 +244,51 @@ def bcbs239_outputs_table(active_only: bool = False) -> pd.DataFrame:
     return dataframe(sql, params)
 
 
-def bcbs239_output_options(active_only: bool = True) -> list[str]:
-    rows = fetch_all(
-        "SELECT output_name FROM bcbs239_outputs WHERE (? = 0 OR active_flag = 1) ORDER BY output_name",
-        (1 if active_only else 0,),
-    )
+def bcbs239_output_options(active_only: bool = True, output_type: str | None = None) -> list[str]:
+    where = []
+    params: list[Any] = []
+    if active_only:
+        where.append("active_flag = 1")
+    if output_type:
+        where.append("output_type = ?")
+        params.append(output_type)
+    sql = "SELECT output_name FROM bcbs239_outputs"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY output_name"
+    rows = fetch_all(sql, tuple(params))
     values = [row["output_name"] for row in rows if row.get("output_name")]
-    return values or sorted(BCBS239_OUTPUTS)
+    if values:
+        return values
+    return sorted(BCBS239_OUTPUTS) if output_type in (None, "Material Report") else []
+
+
+def active_user_options(role: str | None = None, include_blank: bool = False) -> list[str]:
+    sql = "SELECT username FROM user_profiles WHERE active_flag = 1"
+    params: list[Any] = []
+    if role:
+        sql += " AND role = ?"
+        params.append(role)
+    sql += " ORDER BY username"
+    rows = fetch_all(sql, tuple(params))
+    values = [row["username"] for row in rows if row.get("username")]
+    if not values:
+        if role:
+            values = ROLE_USERNAMES.get(role, [])
+        else:
+            values = sorted({u for users in ROLE_USERNAMES.values() for u in users})
+    return ([""] if include_blank else []) + values
+
+
+def reference_options(category: str, fallback: list[str] | None = None, include_blank: bool = False) -> list[str]:
+    rows = fetch_all(
+        "SELECT value FROM reference_data WHERE category = ? AND active_flag = 1 ORDER BY value",
+        (category,),
+    )
+    values = [row["value"] for row in rows if row.get("value")]
+    if not values:
+        values = list(fallback or [])
+    return ([""] if include_blank else []) + values
 
 
 def upsert_bcbs239_output(payload: dict[str, Any], performed_by: str) -> int:
@@ -1314,7 +1357,7 @@ def validate_mapping_fields(payload: dict[str, Any]) -> list[str]:
 
 
 def create_euc(payload: dict[str, Any], username: str) -> int:
-    mandatory = ["name", "owner", "business_unit", "technology_type", "storage_location", "bcbs239_output_mapping"]
+    mandatory = ["name", "legal_entity", "owner", "business_unit", "technology_type", "storage_location", "bcbs239_output_mapping"]
     missing = [field for field in mandatory if not str(payload.get(field, "")).strip()]
     errors = [f"Missing mandatory field: {field}" for field in missing] + validate_mapping_fields(payload)
     if errors:
@@ -1322,51 +1365,33 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
 
     now = utc_now()
     reference_id = generate_reference_id()
+    euc_fields = [
+        "reference_id", "name", "description", "purpose", "legal_entity", "owner", "owner_delegate", "reviewer",
+        "business_unit", "technology_type", "storage_location", "frequency", "schedule", "cut_off", "business_context",
+        "supports_material_report", "supports_material_kri", "supports_material_model", "multi_bu_use", "active_user_count",
+        "created_by_bu", "acquired_third_party_cots", "support_contract_sla", "last_risk_assessment_date",
+        "bcbs239_output_mapping", "cde_linkage", "inputs", "outputs", "recipients", "dependencies", "spof_indicator",
+        "inherent_risk", "residual_risk", "overall_status", "documentation_completeness_status", "lifecycle_status",
+        "next_review_date", "industrialization_rationale", "decommissioning_rationale", "created_by", "created_at", "updated_at",
+        "mapping_na_justification",
+    ]
+    values_by_field = {
+        **payload,
+        "reference_id": reference_id,
+        "spof_indicator": payload.get("spof_indicator", "No"),
+        "inherent_risk": payload.get("inherent_risk", "Medium"),
+        "residual_risk": payload.get("residual_risk", "Medium"),
+        "overall_status": payload.get("overall_status", "Registered"),
+        "documentation_completeness_status": "Not Checked",
+        "lifecycle_status": payload.get("lifecycle_status", "Registered"),
+        "created_by": username,
+        "created_at": now,
+        "updated_at": now,
+    }
+    placeholders = ", ".join("?" for _ in euc_fields)
     euc_id = execute(
-        """
-        INSERT INTO eucs(
-            reference_id, name, description, purpose, owner, owner_delegate, business_unit, technology_type,
-            storage_location, frequency, schedule, cut_off, business_context, bcbs239_output_mapping, cde_linkage,
-            inputs, outputs, recipients, dependencies, spof_indicator, inherent_risk, residual_risk,
-            overall_status, documentation_completeness_status, lifecycle_status, next_review_date,
-            industrialization_rationale, decommissioning_rationale, created_by, created_at, updated_at,
-            mapping_na_justification
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            reference_id,
-            payload.get("name"),
-            payload.get("description"),
-            payload.get("purpose"),
-            payload.get("owner"),
-            payload.get("owner_delegate"),
-            payload.get("business_unit"),
-            payload.get("technology_type"),
-            payload.get("storage_location"),
-            payload.get("frequency"),
-            payload.get("schedule"),
-            payload.get("cut_off"),
-            payload.get("business_context"),
-            payload.get("bcbs239_output_mapping"),
-            payload.get("cde_linkage"),
-            payload.get("inputs"),
-            payload.get("outputs"),
-            payload.get("recipients"),
-            payload.get("dependencies"),
-            payload.get("spof_indicator", "No"),
-            payload.get("inherent_risk", "Medium"),
-            payload.get("residual_risk", "Medium"),
-            payload.get("overall_status", "Registered"),
-            "Not Checked",
-            payload.get("lifecycle_status", "Registered"),
-            payload.get("next_review_date"),
-            payload.get("industrialization_rationale"),
-            payload.get("decommissioning_rationale"),
-            username,
-            now,
-            now,
-            payload.get("mapping_na_justification"),
-        ),
+        f"INSERT INTO eucs({', '.join(euc_fields)}) VALUES ({placeholders})",
+        tuple(values_by_field.get(field) for field in euc_fields),
     )
     insert_audit("EUC", euc_id, "CREATE", username, None, {"reference_id": reference_id, "name": payload.get("name")})
     create_task(
@@ -1401,7 +1426,6 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
     )
     return euc_id
 
-
 def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
     old = get_euc(euc_id)
     if not old:
@@ -1413,8 +1437,10 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "name",
         "description",
         "purpose",
+        "legal_entity",
         "owner",
         "owner_delegate",
+        "reviewer",
         "business_unit",
         "technology_type",
         "storage_location",
@@ -1422,6 +1448,15 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "schedule",
         "cut_off",
         "business_context",
+        "supports_material_report",
+        "supports_material_kri",
+        "supports_material_model",
+        "multi_bu_use",
+        "active_user_count",
+        "created_by_bu",
+        "acquired_third_party_cots",
+        "support_contract_sla",
+        "last_risk_assessment_date",
         "bcbs239_output_mapping",
         "cde_linkage",
         "inputs",
@@ -1463,33 +1498,76 @@ def update_euc_status(euc_id: int, lifecycle_status: str, username: str, overall
 
 
 def get_components(euc_id: int) -> pd.DataFrame:
-    return dataframe("SELECT * FROM components WHERE euc_id = ? ORDER BY component_id", (euc_id,))
+    return dataframe(
+        """
+        SELECT c.*, e.reference_id AS parent_reference_id, e.name AS euc_application, e.business_unit AS parent_business_unit
+        FROM components c
+        JOIN eucs e ON e.euc_id = c.euc_id
+        WHERE c.euc_id = ?
+        ORDER BY c.component_id
+        """,
+        (euc_id,),
+    )
 
 
 def get_component(component_id: int) -> dict[str, Any] | None:
-    return fetch_one("SELECT * FROM components WHERE component_id = ?", (component_id,))
+    return fetch_one(
+        """
+        SELECT c.*, e.reference_id AS parent_reference_id, e.name AS euc_application, e.business_unit AS parent_business_unit
+        FROM components c
+        JOIN eucs e ON e.euc_id = c.euc_id
+        WHERE c.component_id = ?
+        """,
+        (component_id,),
+    )
+
+
+COMPONENT_FIELDS = [
+    "euc_id", "component_name", "component_type", "technology", "storage_location", "description", "criticality", "owner",
+    "rrf_mapping", "operationalization_document_link", "file_description", "technology_type", "controlled_storage_type",
+    "controlled_storage_location", "input_sources", "asset_cut_off", "processing_schedule", "execution_frequency",
+    "cde_mappings", "data_outputs", "level_of_automation", "backup_recovery_arrangements", "spof_risk",
+    "modification_date", "review_date",
+]
+
+
+def _component_insert_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    technology_type = payload.get("technology_type") or payload.get("component_type") or payload.get("technology") or "Other"
+    storage_location = payload.get("controlled_storage_location") or payload.get("storage_location")
+    file_description = payload.get("file_description") or payload.get("description")
+    return {
+        **payload,
+        "component_name": payload.get("component_name") or payload.get("asset_name"),
+        "component_type": payload.get("component_type") or technology_type or "Other",
+        "technology": payload.get("technology") or technology_type,
+        "storage_location": payload.get("storage_location") or storage_location,
+        "description": payload.get("description") or file_description,
+        "file_description": file_description,
+        "technology_type": technology_type,
+        "controlled_storage_location": storage_location,
+    }
 
 
 def create_component(payload: dict[str, Any], username: str) -> int:
     now = utc_now()
+    payload = _component_insert_payload(payload)
+    if not str(payload.get("component_name") or "").strip():
+        raise ValueError("Asset / file name is required.")
+    fields = COMPONENT_FIELDS + ["created_at"]
+    values_by_field = {**payload, "created_at": now}
     component_id = execute(
-        """
-        INSERT INTO components(euc_id, component_name, component_type, technology, storage_location, description, criticality, owner, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            payload["euc_id"],
-            payload["component_name"],
-            payload["component_type"],
-            payload.get("technology"),
-            payload.get("storage_location"),
-            payload.get("description"),
-            payload.get("criticality"),
-            payload.get("owner"),
-            now,
-        ),
+        f"INSERT INTO components({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)})",
+        tuple(values_by_field.get(field) for field in fields),
     )
     insert_audit("Component", component_id, "CREATE", username, None, payload)
+    queue_raci_notifications(
+        "EUC_COMPONENT_UPDATED",
+        "Component",
+        component_id,
+        payload.get("euc_id"),
+        username,
+        context={"Component": payload.get("component_name"), "Action": "Created"},
+    )
     return component_id
 
 
@@ -1497,14 +1575,16 @@ def update_component(component_id: int, payload: dict[str, Any], username: str) 
     old = get_component(component_id)
     if not old:
         raise ValueError("Component not found")
-    allowed_fields = ["component_name", "component_type", "technology", "storage_location", "description", "criticality", "owner"]
+    payload = _component_insert_payload(payload)
+    if not str(payload.get("component_name") or old.get("component_name") or "").strip():
+        raise ValueError("Asset / file name is required.")
+    allowed_fields = [field for field in COMPONENT_FIELDS if field != "euc_id"]
     assignments = ", ".join([f"{field} = ?" for field in allowed_fields])
     values = [payload.get(field, old.get(field)) for field in allowed_fields]
     values.append(component_id)
     execute(f"UPDATE components SET {assignments} WHERE component_id = ?", tuple(values))
     insert_audit("Component", component_id, "UPDATE", username, old, payload)
     queue_raci_notifications("EUC_COMPONENT_UPDATED", "Component", component_id, old.get("euc_id"), username, context={"Component": payload.get("component_name", old.get("component_name"))})
-
 
 def get_risk_assessments(euc_id: int) -> pd.DataFrame:
     return dataframe("SELECT * FROM risk_assessments WHERE euc_id = ? ORDER BY version DESC", (euc_id,))
@@ -1623,10 +1703,11 @@ def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
     execute(
         """
         UPDATE eucs
-        SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?, updated_at = ?
+        SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?,
+            last_risk_assessment_date = ?, updated_at = ?
         WHERE euc_id = ?
         """,
-        (inherent_risk, residual_risk, lifecycle, lifecycle, utc_now(), payload["euc_id"]),
+        (inherent_risk, residual_risk, lifecycle, lifecycle, payload.get("assessment_date", date.today().isoformat()), utc_now(), payload["euc_id"]),
     )
     insert_audit("Risk Assessment", assessment_id, "CREATE", username, None, {**payload, **calculated, "inherent_risk": inherent_risk, "residual_risk": residual_risk})
     queue_raci_notifications(
@@ -1707,8 +1788,8 @@ def recalculate_risk_assessment(assessment_id: int, username: str = "system", wr
     latest = latest_risk_assessment(int(row["euc_id"]))
     if latest and int(latest["assessment_id"]) == int(assessment_id):
         execute(
-            "UPDATE eucs SET inherent_risk = ?, residual_risk = ?, updated_at = ? WHERE euc_id = ?",
-            (inherent_risk, residual_risk, utc_now(), row["euc_id"]),
+            "UPDATE eucs SET inherent_risk = ?, residual_risk = ?, last_risk_assessment_date = ?, updated_at = ? WHERE euc_id = ?",
+            (inherent_risk, residual_risk, row.get("assessment_date"), utc_now(), row["euc_id"]),
         )
     if write_audit:
         insert_audit("Risk Assessment", assessment_id, "RECALCULATE", username, old_snapshot, calculated)
@@ -1889,8 +1970,8 @@ def update_risk_assessment_in_place(assessment_id: int, payload: dict[str, Any],
     latest = latest_risk_assessment(int(old["euc_id"]))
     if latest and int(latest["assessment_id"]) == int(assessment_id):
         execute(
-            "UPDATE eucs SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?, updated_at = ? WHERE euc_id = ?",
-            (inherent_risk, residual_risk, "Awaiting Documentation", "Awaiting Documentation", utc_now(), old["euc_id"]),
+            "UPDATE eucs SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?, last_risk_assessment_date = ?, updated_at = ? WHERE euc_id = ?",
+            (inherent_risk, residual_risk, "Awaiting Documentation", "Awaiting Documentation", payload.get("assessment_date"), utc_now(), old["euc_id"]),
         )
     insert_audit("Risk Assessment", assessment_id, "EDIT", username, old, {**payload, **calculated, "status": "Submitted"})
     queue_raci_notifications(
@@ -3820,7 +3901,19 @@ def audit_trail(filters: dict[str, Any] | None = None) -> pd.DataFrame:
 
 def load_reference_data() -> dict[str, list[str]]:
     refs = dataframe("SELECT category, value FROM reference_data WHERE active_flag = 1 ORDER BY category, value")
-    result = {"document_type": DOCUMENT_TYPES, "lifecycle_status": LIFECYCLE_STATUSES, "risk_level": RISK_LEVELS, "control_area": CONTROL_AREAS, "cacrt_dimension": CACRT_DIMENSIONS, "task_type": TASK_TYPES}
+    result = {
+        "document_type": DOCUMENT_TYPES,
+        "lifecycle_status": LIFECYCLE_STATUSES,
+        "risk_level": RISK_LEVELS,
+        "control_area": CONTROL_AREAS,
+        "cacrt_dimension": CACRT_DIMENSIONS,
+        "task_type": TASK_TYPES,
+        "legal_entity": LEGAL_ENTITIES,
+        "business_unit": BUSINESS_UNITS,
+        "controlled_storage_type": CONTROLLED_STORAGE_TYPES,
+        "level_of_automation": LEVELS_OF_AUTOMATION,
+        "bcbs239_output_type": BCBS239_OUTPUT_TYPES,
+    }
     if refs.empty:
         return result
     for category in refs["category"].unique():
@@ -3980,6 +4073,11 @@ def initialize_reference_data(username: str = "system") -> None:
         "risk_level": RISK_LEVELS,
         "control_area": CONTROL_AREAS,
         "cacrt_dimension": CACRT_DIMENSIONS,
+        "legal_entity": LEGAL_ENTITIES,
+        "business_unit": BUSINESS_UNITS,
+        "controlled_storage_type": CONTROLLED_STORAGE_TYPES,
+        "level_of_automation": LEVELS_OF_AUTOMATION,
+        "bcbs239_output_type": BCBS239_OUTPUT_TYPES,
     }
     for category, values in constants.items():
         for value in values:
