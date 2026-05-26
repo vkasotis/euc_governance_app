@@ -853,13 +853,18 @@ def yes_no_index(value: Any, default: str = "No") -> int:
     return 0
 
 
+BCBS_SCOPE_HELP = "Select Yes if this EUC supports an in-scope item under the 241 BCBS 239 Overarching Framework. The specific primary report/output mapping is selected separately below."
+
+
 def bcbs_material_selectbox(label: str, output_type: str | None = None, value: str | None = None, *, key: str | None = None) -> str:
+    # Keep labels short so the three Yes/No dropdowns align on one row.
+    # The full policy wording is presented once above the group and repeated in help text.
     return st.selectbox(
         label,
         ["No", "Yes"],
         index=yes_no_index(value),
         key=key,
-        help="Select Yes if this EUC supports an in-scope output under the 241 BCBS 239 Overarching Framework. The specific primary report/output mapping is selected separately below.",
+        help=BCBS_SCOPE_HELP,
     )
 
 
@@ -1326,22 +1331,23 @@ def page_register() -> None:
         )
 
         st.subheader("BCBS 239 scope indicators")
+        st.caption("Indicate whether the EUC supports a Material Report, Material KRI, or Material Model in scope under the 241 BCBS 239 Overarching Framework.")
         r1, r2, r3 = st.columns(3)
         with r1:
             supports_material_report = bcbs_material_selectbox(
-                "Supports Material Report in scope under 241 BCBS 239 Overarching Framework?",
+                "Material Report?",
                 "Material Report",
                 key="register_supports_report",
             )
         with r2:
             supports_material_kri = bcbs_material_selectbox(
-                "Supports Material KRI in scope under 241 BCBS 239 Overarching Framework?",
+                "Material KRI?",
                 "Material KRI",
                 key="register_supports_kri",
             )
         with r3:
             supports_material_model = bcbs_material_selectbox(
-                "Supports Material Model in scope under 241 BCBS 239 Overarching Framework?",
+                "Material Model?",
                 "Material Model",
                 key="register_supports_model",
             )
@@ -1583,13 +1589,14 @@ def page_detail() -> None:
                         value=euc.get("business_context") or "",
                         help="Explain why this EUC matters in the business or reporting process, including downstream reports, decisions, controls or BCBS 239 relevance.",
                     )
+                    st.caption("Indicate whether the EUC supports a Material Report, Material KRI, or Material Model in scope under the 241 BCBS 239 Overarching Framework.")
                     m1, m2, m3 = st.columns(3)
                     with m1:
-                        payload["supports_material_report"] = bcbs_material_selectbox("Supports Material Report under 241 BCBS 239 Overarching Framework", "Material Report", euc.get("supports_material_report"), key="detail_supports_report")
+                        payload["supports_material_report"] = bcbs_material_selectbox("Material Report?", "Material Report", euc.get("supports_material_report"), key="detail_supports_report")
                     with m2:
-                        payload["supports_material_kri"] = bcbs_material_selectbox("Supports Material KRI under 241 BCBS 239 Overarching Framework", "Material KRI", euc.get("supports_material_kri"), key="detail_supports_kri")
+                        payload["supports_material_kri"] = bcbs_material_selectbox("Material KRI?", "Material KRI", euc.get("supports_material_kri"), key="detail_supports_kri")
                     with m3:
-                        payload["supports_material_model"] = bcbs_material_selectbox("Supports Material Model under 241 BCBS 239 Overarching Framework", "Material Model", euc.get("supports_material_model"), key="detail_supports_model")
+                        payload["supports_material_model"] = bcbs_material_selectbox("Material Model?", "Material Model", euc.get("supports_material_model"), key="detail_supports_model")
                     payload["bcbs239_output_mapping"] = bcbs_output_selectbox("Primary BCBS 239 output mapping *", euc.get("bcbs239_output_mapping"), key="detail_bcbs239_output")
                     payload["cde_linkage"] = cde_linkage_multiselect("CDE linkage", euc.get("cde_linkage"), key="detail_cde_linkage")
                     for field in ["inputs", "outputs", "recipients", "dependencies", "mapping_na_justification"]:
