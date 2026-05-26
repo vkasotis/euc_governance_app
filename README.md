@@ -276,23 +276,11 @@ All user-facing tabular views now use `streamlit-aggrid` where available. Each t
 - The grid helper now deduplicates display column names before rendering and tolerates Pandas returning a DataFrame instead of a Series during column-width estimation.
 - No business logic, permissions, risk assessment logic, evidence handling, RACI notifications, or inventory field mappings were changed in this patch.
 
-## Patch 44 notes
+## Patch 48 notes
 
-- Required Artifact Checklist now includes task-specific/action-specific `what_user_should_do` guidance in addition to `what_to_upload` evidence-content guidance.
-- Review Evidence wording has been clarified so it applies only to review, approval, challenge and closure-validation activities, not every task/request.
-- Tasks & Remediation now shows a `what_user_should_do` column and an action guidance panel for the selected task.
-- Guidance is derived from task type and, where relevant, the referenced artifact/document type.
-
-## Patch 45 notes
-
-- Fixed Tasks & Remediation startup/runtime safety where `app.py` could call `task_user_action_guidance` while Streamlit Cloud was still running an older `services.py`.
-- Added a defensive app-level fallback for task action guidance so the page does not crash if source files are deployed out of sync.
-- No business workflow, risk-assessment, inventory, evidence, menu, RACI, or reporting logic was changed.
-
-## Patch 46 updates
-
-- Changed EUC Inventory `Supports Material Report`, `Supports Material KRI`, and `Supports Material Model` fields to Yes/No selectors.
-- Updated the labels to reference `241 BCBS 239 Overarching Framework`.
-- Kept the specific BCBS 239 primary report/output mapping as a separate controlled dropdown.
-- Changed EUC Inventory `CDE linkage` from free text to a multi-select dropdown backed by administrator-maintained reference data.
-- Added seeded CDE reference values to `reference_data`; existing stored CDE values are preserved and shown in the selector when editing old records.
+- CDE mappings have been moved out of the EUC parent registration/edit forms and are now captured only at the EUC Asset Inventory child layer.
+- Components / EUC Asset Inventory now uses a controlled multi-select dropdown for CDE Mappings instead of free text.
+- Admin Configuration reference data now includes `cde_mapping` so Group IT Governance Administrators can maintain the CDE dropdown values.
+- Reports & KPIs now includes a prepared CDE mapping report that aggregates CDEs from child asset rows to parent EUCs, business units, owners and risk levels.
+- Custom Reports now includes a `CDE Mapping / Asset Coverage` dataset. The EUC Portfolio custom dataset intentionally excludes the legacy `cde_linkage` column.
+- The legacy `eucs.cde_linkage` database column is retained only for backward compatibility with older local databases.

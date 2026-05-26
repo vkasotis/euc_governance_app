@@ -1456,7 +1456,7 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
         "business_unit", "technology_type", "storage_location", "frequency", "schedule", "cut_off", "business_context",
         "supports_material_report", "supports_material_kri", "supports_material_model", "multi_bu_use", "active_user_count",
         "created_by_bu", "acquired_third_party_cots", "support_contract_sla", "last_risk_assessment_date",
-        "bcbs239_output_mapping", "cde_linkage", "inputs", "outputs", "recipients", "dependencies", "spof_indicator",
+        "bcbs239_output_mapping", "inputs", "outputs", "recipients", "dependencies", "spof_indicator",
         "inherent_risk", "residual_risk", "overall_status", "documentation_completeness_status", "lifecycle_status",
         "next_review_date", "industrialization_rationale", "decommissioning_rationale", "created_by", "created_at", "updated_at",
         "mapping_na_justification",
@@ -1544,7 +1544,6 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "support_contract_sla",
         "last_risk_assessment_date",
         "bcbs239_output_mapping",
-        "cde_linkage",
         "inputs",
         "outputs",
         "recipients",
@@ -3482,6 +3481,12 @@ POLICY_REPORTS = [
         "description": "Rule-based coverage of accepted/satisfied artifacts mapped to CACRT dimensions.",
     },
     {
+        "key": "cde_asset_mapping",
+        "name": "CDE mapping by EUC asset",
+        "policy_basis": "EUC Asset Inventory captures CDE mappings at asset/component level so CDE coverage can be aggregated from child assets to the parent EUC.",
+        "description": "Aggregates Critical Data Elements from EUC Asset Inventory rows by CDE, EUC, business unit and asset count.",
+    },
+    {
         "key": "incident_resolution",
         "name": "Incidents and resolution time",
         "policy_basis": "Policy 2.2.7 requires incidents and resolution-time KPIs.",
@@ -3523,6 +3528,7 @@ CUSTOM_REPORT_DATASETS = {
     "Incidents": "incidents",
     "Material Changes": "material_changes",
     "Components / Assets": "components",
+    "CDE Mapping / Asset Coverage": "cde_mapping_assets",
 }
 
 
@@ -3737,6 +3743,56 @@ def run_policy_report(report_key: str, filters: dict[str, Any] | None = None) ->
                 accepted = int(group["status"].isin(["Accepted"]).sum())
                 rows.append({**euc.to_dict(), "cacrt_dimension": dim, "required_artifacts": required, "accepted_or_satisfied": accepted, "coverage_pct": round(accepted / required * 100, 1) if required else 0.0})
         return pd.DataFrame(rows)
+    if report_key == "cde_asset_mapping":
+        asset_df = dataframe(
+            f"""
+            SELECT e.euc_id, e.reference_id, e.name AS euc_name, e.owner, e.business_unit,
+                   e.inherent_risk, e.residual_risk, c.component_id, c.component_name,
+                   c.cde_mappings, c.data_outputs, c.input_sources
+            FROM components c
+            JOIN eucs e ON e.euc_id = c.euc_id
+            WHERE {where}
+              AND c.cde_mappings IS NOT NULL
+              AND TRIM(c.cde_mappings) <> ''
+            ORDER BY e.reference_id, c.component_name
+            """,
+            tuple(params),
+        )
+        if asset_df.empty:
+            return pd.DataFrame()
+        rows: list[dict[str, Any]] = []
+        for _, item in asset_df.iterrows():
+            cdes = [part.strip() for part in re.split(r"[;,|]", str(item.get("cde_mappings") or "")) if part.strip()]
+            for cde in cdes:
+                rows.append({
+                    "cde_mapping": cde,
+                    "reference_id": item.get("reference_id"),
+                    "euc_name": item.get("euc_name"),
+                    "business_unit": item.get("business_unit"),
+                    "owner": item.get("owner"),
+                    "component_id": item.get("component_id"),
+                    "asset_name": item.get("component_name"),
+                    "input_sources": item.get("input_sources"),
+                    "data_outputs": item.get("data_outputs"),
+                    "inherent_risk": item.get("inherent_risk"),
+                    "residual_risk": item.get("residual_risk"),
+                })
+        exploded = pd.DataFrame(rows)
+        if exploded.empty:
+            return pd.DataFrame()
+        return (
+            exploded.groupby(["cde_mapping", "business_unit"], dropna=False)
+            .agg(
+                euc_count=("reference_id", "nunique"),
+                asset_count=("component_id", "nunique"),
+                eucs=("reference_id", lambda values: "; ".join(sorted(set(str(v) for v in values if str(v) != "nan")))),
+                owners=("owner", lambda values: "; ".join(sorted(set(str(v) for v in values if str(v) != "nan")))),
+                max_inherent_risk=("inherent_risk", lambda values: _max_risk([str(v) for v in values if str(v) and str(v) != "nan"] or ["Medium"])),
+                max_residual_risk=("residual_risk", lambda values: _max_risk([str(v) for v in values if str(v) and str(v) != "nan"] or ["Medium"])),
+            )
+            .reset_index()
+            .sort_values(["cde_mapping", "business_unit"])
+        )
     if report_key == "incident_resolution":
         return dataframe(
             f"""
@@ -3825,7 +3881,20 @@ def run_policy_report(report_key: str, filters: dict[str, Any] | None = None) ->
 
 def _custom_dataset_df(dataset: str) -> pd.DataFrame:
     if dataset == "EUC Portfolio":
-        return dataframe("SELECT * FROM eucs ORDER BY reference_id")
+        # EUC-level CDE linkage is intentionally excluded; CDEs are now reported
+        # from child EUC Asset Inventory rows via c.cde_mappings.
+        return dataframe("""
+            SELECT euc_id, reference_id, name, description, purpose, legal_entity, owner, owner_delegate,
+                   reviewer, business_unit, technology_type, storage_location, frequency, schedule, cut_off,
+                   business_context, supports_material_report, supports_material_kri, supports_material_model,
+                   multi_bu_use, active_user_count, created_by_bu, acquired_third_party_cots, support_contract_sla,
+                   last_risk_assessment_date, bcbs239_output_mapping, inputs, outputs, recipients, dependencies,
+                   spof_indicator, inherent_risk, residual_risk, overall_status, documentation_completeness_status,
+                   lifecycle_status, next_review_date, industrialization_rationale, decommissioning_rationale,
+                   created_by, created_at, updated_at, mapping_na_justification
+            FROM eucs
+            ORDER BY reference_id
+        """)
     if dataset == "Tasks":
         return get_tasks(open_only=False)
     if dataset == "Documents / Evidence":
@@ -3858,6 +3927,8 @@ def _custom_dataset_df(dataset: str) -> pd.DataFrame:
             SELECT m.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk
             FROM material_changes m JOIN eucs e ON e.euc_id = m.euc_id ORDER BY m.created_at DESC
         """)
+    if dataset == "CDE Mapping / Asset Coverage":
+        return run_policy_report("cde_asset_mapping", None)
     if dataset == "Components / Assets":
         return dataframe("""
             SELECT c.*, e.reference_id, e.name AS euc_name, e.owner AS euc_owner, e.business_unit, e.inherent_risk, e.residual_risk
@@ -4000,6 +4071,7 @@ def load_reference_data() -> dict[str, list[str]]:
         "controlled_storage_type": CONTROLLED_STORAGE_TYPES,
         "level_of_automation": LEVELS_OF_AUTOMATION,
         "bcbs239_output_type": BCBS239_OUTPUT_TYPES,
+        "cde_mapping": CDE_LINKAGE_OPTIONS,
         "cde_linkage": CDE_LINKAGE_OPTIONS,
     }
     if refs.empty:
@@ -4166,6 +4238,7 @@ def initialize_reference_data(username: str = "system") -> None:
         "controlled_storage_type": CONTROLLED_STORAGE_TYPES,
         "level_of_automation": LEVELS_OF_AUTOMATION,
         "bcbs239_output_type": BCBS239_OUTPUT_TYPES,
+        "cde_mapping": CDE_LINKAGE_OPTIONS,
         "cde_linkage": CDE_LINKAGE_OPTIONS,
     }
     for category, values in constants.items():

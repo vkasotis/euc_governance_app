@@ -880,8 +880,18 @@ def _split_multi_value(value: Any) -> list[str]:
     return [part.strip() for part in parts if part.strip()]
 
 
-def cde_linkage_multiselect(label: str, value: str | None = None, *, key: str | None = None) -> str:
-    options = svc.reference_options("cde_linkage", fallback=CDE_LINKAGE_OPTIONS, include_blank=False)
+def cde_mapping_multiselect(label: str, value: str | None = None, *, key: str | None = None) -> str:
+    """Controlled CDE selector for EUC Asset Inventory rows.
+
+    CDEs are captured at the asset/component layer because different files,
+    scripts, reports or process assets under the same EUC can consume or produce
+    different Critical Data Elements. The legacy `cde_linkage` reference category
+    is also read so older deployments keep their configured values.
+    """
+    options = svc.reference_options("cde_mapping", fallback=CDE_LINKAGE_OPTIONS, include_blank=False)
+    for item in svc.reference_options("cde_linkage", fallback=[], include_blank=False):
+        if item not in options:
+            options.append(item)
     current = _split_multi_value(value)
     for item in current:
         if item not in options:
@@ -891,9 +901,14 @@ def cde_linkage_multiselect(label: str, value: str | None = None, *, key: str | 
         options,
         default=[item for item in current if item in options],
         key=key,
-        help="Select one or more Critical Data Elements linked to this EUC. Administrators can maintain the CDE list in Admin Configuration reference data.",
+        help="Select one or more Critical Data Elements for this specific EUC asset. Administrators can maintain the CDE list in Admin Configuration reference data.",
     )
     return "; ".join(selected)
+
+
+def cde_linkage_multiselect(label: str, value: str | None = None, *, key: str | None = None) -> str:
+    """Backward-compatible alias for older code paths."""
+    return cde_mapping_multiselect(label, value, key=key)
 
 
 def bcbs_any_mapping_selectbox(label: str, value: str | None = None, *, key: str | None = None, include_blank: bool = True) -> str:
@@ -1381,7 +1396,6 @@ def page_register() -> None:
             help="Explain why this EUC matters in the business or reporting process, including downstream reports, decisions, controls or BCBS 239 relevance.",
         )
         bcbs_mapping = bcbs_output_selectbox("Primary BCBS 239 output mapping *", None, key="register_bcbs239_output")
-        cde_linkage = cde_linkage_multiselect("CDE linkage (optional)", key="register_cde_linkage")
         inputs = st.text_area("Inputs")
         outputs = st.text_area("Outputs")
         recipients = st.text_area("Recipients")
@@ -1420,7 +1434,6 @@ def page_register() -> None:
                     "acquired_third_party_cots": acquired_third_party_cots,
                     "support_contract_sla": support_contract_sla,
                     "bcbs239_output_mapping": bcbs_mapping,
-                    "cde_linkage": cde_linkage,
                     "inputs": inputs,
                     "outputs": outputs,
                     "recipients": recipients,
@@ -1571,7 +1584,6 @@ def page_detail() -> None:
                 ("Supports Material KRI", "supports_material_kri"),
                 ("Supports Material Model", "supports_material_model"),
                 ("BCBS 239 output mapping", "bcbs239_output_mapping"),
-                ("CDE linkage", "cde_linkage"),
                 "inputs",
                 "outputs",
                 "recipients",
@@ -1598,7 +1610,6 @@ def page_detail() -> None:
                     with m3:
                         payload["supports_material_model"] = bcbs_material_selectbox("Material Model?", "Material Model", euc.get("supports_material_model"), key="detail_supports_model")
                     payload["bcbs239_output_mapping"] = bcbs_output_selectbox("Primary BCBS 239 output mapping *", euc.get("bcbs239_output_mapping"), key="detail_bcbs239_output")
-                    payload["cde_linkage"] = cde_linkage_multiselect("CDE linkage", euc.get("cde_linkage"), key="detail_cde_linkage")
                     for field in ["inputs", "outputs", "recipients", "dependencies", "mapping_na_justification"]:
                         payload[field] = st.text_area(field.replace("_", " ").title(), value=euc.get(field) or "")
                     if st.form_submit_button("Save mapping"):
@@ -1670,7 +1681,7 @@ def _component_asset_form(prefix: str, euc: dict[str, Any], component: dict[str,
 
     st.markdown("#### 4. Inputs, outputs and CDEs")
     input_sources = st.text_area("Input sources", value=component.get("input_sources") or "", key=f"{prefix}_input_sources")
-    cde_mappings = st.text_area("CDE Mappings", value=component.get("cde_mappings") or "", key=f"{prefix}_cde_mappings")
+    cde_mappings = cde_mapping_multiselect("CDE Mappings", component.get("cde_mappings"), key=f"{prefix}_cde_mappings")
     data_outputs = st.text_area("Data Outputs", value=component.get("data_outputs") or "", key=f"{prefix}_data_outputs")
 
     st.markdown("#### 5. Schedule, frequency and cut-off")
@@ -2566,6 +2577,7 @@ def page_admin() -> None:
                 "business_unit",
                 "controlled_storage_type",
                 "level_of_automation",
+                "cde_mapping",
             ],
         )
         st.write("Current values")

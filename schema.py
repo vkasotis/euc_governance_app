@@ -203,8 +203,9 @@ LEVELS_OF_AUTOMATION = [
 
 BCBS239_OUTPUT_TYPES = ["Material Report", "Material KRI", "Material Model"]
 
-# MVP configurable CDE list used by the EUC Inventory CDE linkage multi-select.
+# MVP configurable CDE list used by the EUC Asset Inventory CDE mappings multi-select.
 # The values are seeded into reference_data and can be extended by administrators.
+# The old eucs.cde_linkage column remains for backward compatibility but CDEs are now captured at child-asset level.
 CDE_LINKAGE_OPTIONS = [
     "Customer ID",
     "Counterparty ID",
@@ -319,6 +320,7 @@ REFERENCE_CATEGORIES = [
     "business_unit",
     "controlled_storage_type",
     "level_of_automation",
+    "cde_mapping",
 ]
 
 DEFAULT_REQUIRED_ARTIFACTS = {
