@@ -22,6 +22,7 @@ from schema import (
     BCBS239_OUTPUTS,
     BCBS239_OUTPUT_TYPES,
     BUSINESS_UNITS,
+    CDE_LINKAGE_OPTIONS,
     CACRT_DIMENSIONS,
     CONTROL_AREAS,
     CONTROLLED_STORAGE_TYPES,
@@ -3999,6 +4000,7 @@ def load_reference_data() -> dict[str, list[str]]:
         "controlled_storage_type": CONTROLLED_STORAGE_TYPES,
         "level_of_automation": LEVELS_OF_AUTOMATION,
         "bcbs239_output_type": BCBS239_OUTPUT_TYPES,
+        "cde_linkage": CDE_LINKAGE_OPTIONS,
     }
     if refs.empty:
         return result
@@ -4164,6 +4166,7 @@ def initialize_reference_data(username: str = "system") -> None:
         "controlled_storage_type": CONTROLLED_STORAGE_TYPES,
         "level_of_automation": LEVELS_OF_AUTOMATION,
         "bcbs239_output_type": BCBS239_OUTPUT_TYPES,
+        "cde_linkage": CDE_LINKAGE_OPTIONS,
     }
     for category, values in constants.items():
         for value in values:

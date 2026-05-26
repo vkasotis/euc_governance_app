@@ -203,6 +203,32 @@ LEVELS_OF_AUTOMATION = [
 
 BCBS239_OUTPUT_TYPES = ["Material Report", "Material KRI", "Material Model"]
 
+# MVP configurable CDE list used by the EUC Inventory CDE linkage multi-select.
+# The values are seeded into reference_data and can be extended by administrators.
+CDE_LINKAGE_OPTIONS = [
+    "Customer ID",
+    "Counterparty ID",
+    "Account Number",
+    "Facility ID",
+    "Product Code",
+    "Exposure Amount",
+    "Outstanding Balance",
+    "Collateral Value",
+    "Currency",
+    "Maturity Date",
+    "Interest Rate",
+    "Risk Weight",
+    "Probability of Default",
+    "Loss Given Default",
+    "IFRS 9 Stage",
+    "Impairment Allowance",
+    "NPE Flag",
+    "Forbearance Flag",
+    "Liquidity Metric",
+    "Capital Metric",
+    "Other CDE",
+]
+
 DOCUMENT_TYPES = [
     "Risk Assessment",
     "Operating Procedure",

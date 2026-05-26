@@ -288,3 +288,11 @@ All user-facing tabular views now use `streamlit-aggrid` where available. Each t
 - Fixed Tasks & Remediation startup/runtime safety where `app.py` could call `task_user_action_guidance` while Streamlit Cloud was still running an older `services.py`.
 - Added a defensive app-level fallback for task action guidance so the page does not crash if source files are deployed out of sync.
 - No business workflow, risk-assessment, inventory, evidence, menu, RACI, or reporting logic was changed.
+
+## Patch 46 updates
+
+- Changed EUC Inventory `Supports Material Report`, `Supports Material KRI`, and `Supports Material Model` fields to Yes/No selectors.
+- Updated the labels to reference `241 BCBS 239 Overarching Framework`.
+- Kept the specific BCBS 239 primary report/output mapping as a separate controlled dropdown.
+- Changed EUC Inventory `CDE linkage` from free text to a multi-select dropdown backed by administrator-maintained reference data.
+- Added seeded CDE reference values to `reference_data`; existing stored CDE values are preserved and shown in the selector when editing old records.

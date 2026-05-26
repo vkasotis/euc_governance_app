@@ -36,6 +36,7 @@ APPROVAL_STATUSES = getattr(app_schema, "APPROVAL_STATUSES", ["Pending", "Approv
 BCBS239_OUTPUT_TYPES = getattr(app_schema, "BCBS239_OUTPUT_TYPES", ["Material Report", "Material KRI", "Material Model"])
 BUSINESS_UNITS = getattr(app_schema, "BUSINESS_UNITS", ["Risk Management", "Finance", "Treasury", "Retail Banking", "Corporate Banking", "Group Finance", "Group Risk", "Operations", "Compliance", "Other"])
 CACRT_DIMENSIONS = getattr(app_schema, "CACRT_DIMENSIONS", ["Completeness", "Accuracy", "Consistency", "Reasonableness", "Timeliness", "Traceability"])
+CDE_LINKAGE_OPTIONS = getattr(app_schema, "CDE_LINKAGE_OPTIONS", ["Customer ID", "Counterparty ID", "Account Number", "Facility ID", "Product Code", "Exposure Amount", "Outstanding Balance", "Collateral Value", "Currency", "Maturity Date", "Risk Weight", "Probability of Default", "Loss Given Default", "IFRS 9 Stage", "Impairment Allowance", "NPE Flag", "Forbearance Flag", "Liquidity Metric", "Capital Metric", "Other CDE"])
 CHANGE_TYPES = getattr(app_schema, "CHANGE_TYPES", ["Logic", "Inputs", "Outputs", "Recipients", "Thresholds", "Security", "Storage", "Dependencies", "Platform", "Other"])
 CONTROL_AREAS = getattr(app_schema, "CONTROL_AREAS", ["Ownership & Accountability", "Inventory & Classification", "Data Inputs & Lineage", "Data Validation", "Change Management", "Access Control", "Operational Resilience", "Reconciliation & Controls", "Issue Management", "Decommissioning"])
 CONTROLLED_STORAGE_TYPES = getattr(app_schema, "CONTROLLED_STORAGE_TYPES", ["Controlled SharePoint", "Controlled Network Drive", "Document Management System", "Code Repository", "Database", "Other"])
@@ -840,19 +841,54 @@ def user_selectbox(label: str, value: str | None = None, *, key: str | None = No
     return st.selectbox(label, options, index=option_index(options, current, 0), key=key, help=help)
 
 
-def bcbs_material_selectbox(label: str, output_type: str, value: str | None = None, *, key: str | None = None) -> str:
-    options = ["Not Applicable"] + svc.bcbs239_output_options(active_only=True, output_type=output_type)
-    current = (value or "Not Applicable").strip()
-    if current and current not in options:
-        options.append(current)
+def yes_no_index(value: Any, default: str = "No") -> int:
+    text = str(value or default).strip().lower()
+    if text in {"yes", "y", "true", "1"}:
+        return 1
+    # Older app versions stored the selected report/KRI/model name here. Any
+    # non-empty value other than Not Applicable/No is interpreted as Yes during
+    # display/edit so old records do not appear incorrectly as No.
+    if text and text not in {"no", "n", "false", "0", "not applicable", "n/a", "na", "none"}:
+        return 1
+    return 0
+
+
+def bcbs_material_selectbox(label: str, output_type: str | None = None, value: str | None = None, *, key: str | None = None) -> str:
     return st.selectbox(
         label,
-        options,
-        index=option_index(options, current, 0),
+        ["No", "Yes"],
+        index=yes_no_index(value),
         key=key,
-        help=f"Select the relevant {output_type.lower()} or Not Applicable. Values are maintained in Admin Configuration > BCBS 239 outputs.",
+        help="Select Yes if this EUC supports an in-scope output under the 241 BCBS 239 Overarching Framework. The specific primary report/output mapping is selected separately below.",
     )
 
+
+def _split_multi_value(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    parts = re.split(r"[;,|]", text)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def cde_linkage_multiselect(label: str, value: str | None = None, *, key: str | None = None) -> str:
+    options = svc.reference_options("cde_linkage", fallback=CDE_LINKAGE_OPTIONS, include_blank=False)
+    current = _split_multi_value(value)
+    for item in current:
+        if item not in options:
+            options.append(item)
+    selected = st.multiselect(
+        label,
+        options,
+        default=[item for item in current if item in options],
+        key=key,
+        help="Select one or more Critical Data Elements linked to this EUC. Administrators can maintain the CDE list in Admin Configuration reference data.",
+    )
+    return "; ".join(selected)
 
 
 def bcbs_any_mapping_selectbox(label: str, value: str | None = None, *, key: str | None = None, include_blank: bool = True) -> str:
@@ -1293,19 +1329,19 @@ def page_register() -> None:
         r1, r2, r3 = st.columns(3)
         with r1:
             supports_material_report = bcbs_material_selectbox(
-                "Supports Material Report in scope under Policy 241?",
+                "Supports Material Report in scope under 241 BCBS 239 Overarching Framework?",
                 "Material Report",
                 key="register_supports_report",
             )
         with r2:
             supports_material_kri = bcbs_material_selectbox(
-                "Supports Material KRI in scope under Policy 241?",
+                "Supports Material KRI in scope under 241 BCBS 239 Overarching Framework?",
                 "Material KRI",
                 key="register_supports_kri",
             )
         with r3:
             supports_material_model = bcbs_material_selectbox(
-                "Supports Material Model in scope under Policy 241?",
+                "Supports Material Model in scope under 241 BCBS 239 Overarching Framework?",
                 "Material Model",
                 key="register_supports_model",
             )
@@ -1338,9 +1374,8 @@ def page_register() -> None:
             "Business / reporting context",
             help="Explain why this EUC matters in the business or reporting process, including downstream reports, decisions, controls or BCBS 239 relevance.",
         )
-        default_mapping = supports_material_report if supports_material_report != "Not Applicable" else None
-        bcbs_mapping = bcbs_output_selectbox("Primary BCBS 239 output mapping *", default_mapping, key="register_bcbs239_output")
-        cde_linkage = st.text_area("CDE linkage (optional)")
+        bcbs_mapping = bcbs_output_selectbox("Primary BCBS 239 output mapping *", None, key="register_bcbs239_output")
+        cde_linkage = cde_linkage_multiselect("CDE linkage (optional)", key="register_cde_linkage")
         inputs = st.text_area("Inputs")
         outputs = st.text_area("Outputs")
         recipients = st.text_area("Recipients")
@@ -1550,13 +1585,14 @@ def page_detail() -> None:
                     )
                     m1, m2, m3 = st.columns(3)
                     with m1:
-                        payload["supports_material_report"] = bcbs_material_selectbox("Supports Material Report", "Material Report", euc.get("supports_material_report"), key="detail_supports_report")
+                        payload["supports_material_report"] = bcbs_material_selectbox("Supports Material Report under 241 BCBS 239 Overarching Framework", "Material Report", euc.get("supports_material_report"), key="detail_supports_report")
                     with m2:
-                        payload["supports_material_kri"] = bcbs_material_selectbox("Supports Material KRI", "Material KRI", euc.get("supports_material_kri"), key="detail_supports_kri")
+                        payload["supports_material_kri"] = bcbs_material_selectbox("Supports Material KRI under 241 BCBS 239 Overarching Framework", "Material KRI", euc.get("supports_material_kri"), key="detail_supports_kri")
                     with m3:
-                        payload["supports_material_model"] = bcbs_material_selectbox("Supports Material Model", "Material Model", euc.get("supports_material_model"), key="detail_supports_model")
+                        payload["supports_material_model"] = bcbs_material_selectbox("Supports Material Model under 241 BCBS 239 Overarching Framework", "Material Model", euc.get("supports_material_model"), key="detail_supports_model")
                     payload["bcbs239_output_mapping"] = bcbs_output_selectbox("Primary BCBS 239 output mapping *", euc.get("bcbs239_output_mapping"), key="detail_bcbs239_output")
-                    for field in ["cde_linkage", "inputs", "outputs", "recipients", "dependencies", "mapping_na_justification"]:
+                    payload["cde_linkage"] = cde_linkage_multiselect("CDE linkage", euc.get("cde_linkage"), key="detail_cde_linkage")
+                    for field in ["inputs", "outputs", "recipients", "dependencies", "mapping_na_justification"]:
                         payload[field] = st.text_area(field.replace("_", " ").title(), value=euc.get(field) or "")
                     if st.form_submit_button("Save mapping"):
                         try:
