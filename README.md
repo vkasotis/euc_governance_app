@@ -111,9 +111,9 @@ Default mandatory evidence rules are driven by Overall Inherent Risk / BCBS 239 
 | Overall inherent-risk baseline | Required artifacts |
 |---|---|
 | Low | Risk Assessment, Operating Procedure |
-| Medium | Risk Assessment, Operating Procedure, Versioning / Change Log Evidence, Control Evidence, Review Evidence |
-| High | Risk Assessment, Operating Procedure, Library of Controls, Versioning / Change Log Evidence, Testing Evidence, Reconciliation Evidence, Review Evidence, Access Review Evidence, Resilience Evidence |
-| Very High | Risk Assessment, Operating Procedure, Library of Controls, Versioning / Change Log Evidence, Design / Logic Evidence, Testing Evidence, UAT Evidence, Reconciliation Evidence, Resilience Evidence, Review Evidence, Approval Evidence, Access Review Evidence, Evidence Pack Index |
+| Medium | Risk Assessment, Operating Procedure, Change & Versioning Evidence, Control Evidence, Review Evidence |
+| High | Risk Assessment, Operating Procedure, Library of Controls, Change & Versioning Evidence, Testing Evidence, Reconciliation Evidence, Review Evidence, Access Review Evidence, Resilience Evidence |
+| Very High | Risk Assessment, Operating Procedure, Library of Controls, Change & Versioning Evidence, Design / Logic Evidence, Testing Evidence, UAT Evidence, Reconciliation Evidence, Resilience Evidence, Review Evidence, Approval Evidence, Access Review Evidence, Evidence Pack (dynamic in-app index) |
 
 Additional event-driven overlays are added for SPOF, incidents, material changes, exceptions, industrialization, and decommissioning. These rules are inserted into the `required_artifact_rules` table and can be extended from Admin Configuration.
 
@@ -257,30 +257,3 @@ All user-facing tabular views now use `streamlit-aggrid` where available. Each t
 - **Description** explains what the EUC is.
 - **Purpose** explains what the EUC is used for and what it produces or supports.
 - **Business / reporting context** explains why the EUC matters in the wider business, reporting, control, or BCBS 239 process.
-
-## Patch 41 notes
-
-- Merged the confirmed EUC Inventory and EUC Asset Inventory workbook alignment into the latest app baseline.
-- EUC Inventory now includes the additional parent/application fields from the workbook: legal entity, reviewer, material report/KRI/model mappings, multi-BU use, active user count, BU-created flag, third-party/COTS flag, support contract/SLA flag, and last risk assessment date.
-- Legal Entity and Business Unit are controlled dropdowns maintained from Admin Configuration reference data.
-- Owner, Owner Delegate and Reviewer are selected from the editable User Directory.
-- Supports Material Report, Supports Material KRI and Supports Material Model are controlled dropdowns filtered from BCBS 239 outputs by output type: Material Report, Material KRI or Material Model.
-- Last Risk Assessment date and overall inherent/residual risk are updated by the Risk Assessment module and are not manually maintained.
-- Components / Assets has been expanded into the full EUC Asset Inventory child form linked to the parent EUC by `euc_id`. Parent Business Unit, Application and Reference ID are shown as read-only context.
-- Asset fields now cover RRF Report/KRI/Model mapping, operationalization link, asset/file name, file description, technology, controlled storage type/location, inputs, cut-off, processing schedule, execution frequency, CDE mappings, outputs, automation level, backup/recovery, SPOF risk, modification date and review date.
-- Existing confirmed behavior is preserved: Option B role-based menu, AgGrid no-rerun filters and readability, risk assessment workflow, evidence upload reset, multi-file/multi-type evidence upload, user directory, RACI notifications, reports, no automatic operational-data reseeding, and Group IT/admin content restrictions.
-
-## Patch 43 notes
-
-- Fixed an AgGrid startup/runtime error in EUC Detail View and other joined tables when a dataframe contains duplicate column names.
-- The grid helper now deduplicates display column names before rendering and tolerates Pandas returning a DataFrame instead of a Series during column-width estimation.
-- No business logic, permissions, risk assessment logic, evidence handling, RACI notifications, or inventory field mappings were changed in this patch.
-
-## Patch 48 notes
-
-- CDE mappings have been moved out of the EUC parent registration/edit forms and are now captured only at the EUC Asset Inventory child layer.
-- Components / EUC Asset Inventory now uses a controlled multi-select dropdown for CDE Mappings instead of free text.
-- Admin Configuration reference data now includes `cde_mapping` so Group IT Governance Administrators can maintain the CDE dropdown values.
-- Reports & KPIs now includes a prepared CDE mapping report that aggregates CDEs from child asset rows to parent EUCs, business units, owners and risk levels.
-- Custom Reports now includes a `CDE Mapping / Asset Coverage` dataset. The EUC Portfolio custom dataset intentionally excludes the legacy `cde_linkage` column.
-- The legacy `eucs.cde_linkage` database column is retained only for backward compatibility with older local databases.

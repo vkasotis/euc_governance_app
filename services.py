@@ -20,16 +20,10 @@ import pandas as pd
 from db import UPLOAD_PATH, dataframe, execute, fetch_all, fetch_one, insert_audit, utc_now
 from schema import (
     BCBS239_OUTPUTS,
-    BCBS239_OUTPUT_TYPES,
-    BUSINESS_UNITS,
-    CDE_LINKAGE_OPTIONS,
     CACRT_DIMENSIONS,
     CONTROL_AREAS,
-    CONTROLLED_STORAGE_TYPES,
     DEFAULT_REQUIRED_ARTIFACTS,
     DOCUMENT_TYPES,
-    LEGAL_ENTITIES,
-    LEVELS_OF_AUTOMATION,
     LIFECYCLE_STATUSES,
     RACI_PARTIES,
     RACI_RULE_DEFINITIONS,
@@ -95,23 +89,18 @@ ARTIFACT_UPLOAD_GUIDANCE = {
     "Risk Assessment": "No separate file upload is expected. Complete the Risk Assessment module; it remains Submitted until GCC/Data Validation review accepts it.",
     "Operating Procedure": "Runbook or operating procedure covering purpose, inputs, execution steps, cut-offs, checkpoints, fallback, distribution and evidence references.",
     "Library of Controls": "EUC control library mapped to CACRT categories, with control owner, frequency, thresholds, escalation, evidence location and retention.",
-    "Versioning / Change Log Evidence": "Release log, version history, tagged release notes, change approvals, parameter/assumption changes and controlled repository evidence.",
+    "Change & Versioning Evidence": "Release log, version history, tagged release notes, change approvals, parameter/assumption changes and controlled repository evidence.",
     "Design / Logic Evidence": "Business rules, formula/macro/script/notebook logic, key parameters, assumptions, field mappings and transformation explanation.",
     "Control Evidence": "Evidence that input/output completeness, accuracy, timeliness and exception controls operated for the relevant run or review period.",
     "Testing Evidence": "Unit, functional, regression or challenger testing outputs, test cases, results, defects and sign-off.",
     "UAT Evidence": "UAT plan, scenarios, data used, steps, results, issues, conclusions and formal user/head-of-unit sign-off.",
     "Approval Evidence": "Approval email, workflow/ticket sign-off, Head of Unit approval, Senior Management approval or committee escalation evidence, depending on risk.",
     "Access Review Evidence": "Named user/role access list, RBAC/RLS evidence, access review sign-off, leaver/role-change revocation evidence and distribution list control.",
-    "Independent / Periodic Review Evidence": "Dated independent/four-eye or periodic review checklist, workflow record or email confirmation identifying the EUC, review/run scope, checks performed, issues identified, reviewer conclusion and remediation actions where applicable.",
     "Review Evidence": "Upload dated review evidence, such as a checklist, workflow record, email confirmation or governance sign-off, identifying the EUC, review/run scope, checks performed, issues identified, reviewer conclusion and remediation actions where applicable. This applies to review, approval, challenge and closure-validation activities; it is not a generic requirement for every task.",
     "Reconciliation Evidence": "Reconciliations to authoritative sources or benchmarks, control totals, variance thresholds, explained deltas and reviewer sign-off.",
     "Resilience Evidence": "Backup verification, restore drill or equivalent, BCP/fallback steps, deputy-cover evidence and SPOF mitigation.",
-    "Evidence Pack Index": "Index mapping each required artifact/control/CACRT dimension to document IDs, repository paths, evidence owners and retention references.",
     "Exception Record": "Approved exception record with control gap, root cause, compensating controls, residual risk, target date, expiry date and monitoring plan.",
     "Incident Evidence": "Incident record with affected outputs, dates, impact assessment, containment, correction, re-issue evidence and communications.",
-    "Incident RCA Evidence": "Root-cause analysis with contributing causes, corrective/preventive actions, owners, dates and risk-assessment impact.",
-    "Containment / Correction Evidence": "Evidence of distribution hold/withdrawal, isolation, corrected run, reconciliations, corrected output and explanatory note.",
-    "Change Evidence": "Material change request, rationale, impact assessment, cut-over/rollback plan, approvals and stakeholder communication.",
     "Archive Evidence": "Final released version, final evidence pack, approved archive location and retention confirmation.",
     "Access Revocation Evidence": "Proof that access to legacy/decommissioned locations was revoked and distribution routes disabled.",
     "Industrialization Assessment Evidence": "Industrialization rationale, prioritization score, project/BEF submission, decision record and delivery-pipeline reference.",
@@ -119,96 +108,32 @@ ARTIFACT_UPLOAD_GUIDANCE = {
 }
 
 
-def artifact_upload_guidance(document_type: str) -> str:
-    return ARTIFACT_UPLOAD_GUIDANCE.get(
-        document_type,
-        "Upload evidence sufficient for the reviewer to verify the specific requirement, control operation, owner, date, scope and conclusion.",
-    )
+DOCUMENT_TYPE_ALIASES = {
+    "Versioning / Change Log Evidence": "Change & Versioning Evidence",
+    "Change Evidence": "Change & Versioning Evidence",
+    "Incident Evidence": "Incident & RCA Evidence",
+    "Incident RCA Evidence": "Incident & RCA Evidence",
+    "Containment / Correction Evidence": "Incident & RCA Evidence",
+    "Independent / Periodic Review Evidence": "Review Evidence",
+    "Evidence Pack Index": None,
+}
 
 
-def artifact_user_action(document_type: str, status: str | None = None) -> str:
-    """Return action-oriented guidance for a checklist artifact.
-
-    The app must not make Review Evidence look like a universal requirement.
-    Each artifact type receives targeted instructions, while the status controls
-    whether the owner should act now, wait for review, or no longer needs to act.
-    """
+def canonical_document_type(document_type: str | None) -> str | None:
     doc_type = str(document_type or "").strip()
-    normalized_status = str(status or "Missing").strip() or "Missing"
-    if doc_type == "Risk Assessment":
-        base = "Complete or update the Risk Assessment module for this EUC. Do not upload a separate risk-assessment file. The assessment remains Submitted until GCC/Data Validation accepts or rejects it."
-    else:
-        base = artifact_upload_guidance(doc_type)
-
-    if normalized_status == "Accepted":
-        return f"No current owner action for this artifact. Accepted evidence is already on file. Evidence expectation: {base}"
-    if normalized_status == "Submitted":
-        return f"Evidence has been submitted and is awaiting reviewer action. Monitor review comments; replace or supplement evidence only if GCC/Data Validation rejects it. Evidence expectation: {base}"
-    if normalized_status == "Rejected":
-        return f"Replace or correct the rejected evidence and resubmit it under this document type. Address the reviewer comments/deficiency tag before resubmission. Evidence expectation: {base}"
-    if normalized_status == "Expired":
-        return f"Upload a refreshed/current version of this evidence and submit it for review. Evidence expectation: {base}"
-    if normalized_status == "Superseded":
-        return f"Confirm the superseding evidence is uploaded and accepted. Upload a current replacement if no accepted replacement exists. Evidence expectation: {base}"
-    if normalized_status == "Pending":
-        return f"Submit the required evidence for reviewer assessment. Evidence expectation: {base}"
-    return f"Provide this missing mandatory artifact. Evidence expectation: {base}"
+    if not doc_type:
+        return None
+    return DOCUMENT_TYPE_ALIASES.get(doc_type, doc_type)
 
 
-def _extract_artifact_from_task(title: str | None, description: str | None = None) -> str | None:
-    """Infer a document type from task wording when one is present."""
-    text = f"{title or ''} {description or ''}".strip()
-    for prefix, suffix in [
-        ("Provide mandatory ", ""),
-        ("Replace rejected ", " evidence"),
-        ("Upload ", " evidence"),
-    ]:
-        if prefix in text:
-            candidate = text.split(prefix, 1)[1]
-            if suffix and suffix in candidate:
-                candidate = candidate.split(suffix, 1)[0]
-            candidate = candidate.split(".", 1)[0].split(";", 1)[0].strip()
-            if candidate in ARTIFACT_UPLOAD_GUIDANCE or candidate == "Risk Assessment":
-                return candidate
-    for doc_type in sorted(ARTIFACT_UPLOAD_GUIDANCE, key=len, reverse=True):
-        if doc_type.lower() in text.lower():
-            return doc_type
-    return None
-
-
-def task_user_action_guidance(task: dict[str, Any] | pd.Series) -> str:
-    """Return task-specific instructions for Tasks & Remediation.
-
-    Guidance is based on the task type and, where possible, the document/artifact
-    referenced by the title or description. This prevents review-signoff wording
-    from being reused for unrelated requests.
-    """
-    if isinstance(task, pd.Series):
-        row = task.to_dict()
-    else:
-        row = dict(task or {})
-    task_type = str(row.get("task_type") or "").strip()
-    title = str(row.get("title") or "").strip()
-    description = str(row.get("description") or "").strip()
-    artifact = _extract_artifact_from_task(title, description)
-
-    if task_type in {"Risk assessment", "Reassessment"}:
-        return "Go to the Risk Assessment page for this EUC, complete or amend the assessment, and submit it. No separate risk-assessment file should be uploaded."
-    if task_type in {"Document submission", "Missing evidence", "Documentation refresh"}:
-        if artifact:
-            return f"Go to Documents & Evidence Pack and upload/refresh `{artifact}` for this EUC. {artifact_user_action(artifact, 'Missing')}"
-        return "Go to Documents & Evidence Pack, review the Required Artifact Checklist, and upload or refresh the specific missing/rejected/expired artifact shown for this EUC."
-    if task_type == "Remediation":
-        return "Review the related finding, residual-risk issue, or reviewer comment; remediate the control/data/documentation gap; upload closure evidence where needed; then update the task with the closure response and evidence document ID."
-    if task_type == "Review response":
-        if "exception" in title.lower() or "exception" in description.lower():
-            return "Review the exception request and supporting evidence. Approvers should approve/reject in the Exceptions page; owners should address comments or provide additional evidence if returned."
-        return "Review the GCC/Data Validation outcome or challenge comments, respond to each point, upload any requested supporting evidence, and update the task with your response."
-    if task_type == "Closure evidence":
-        return "Upload evidence proving the remediation/action is complete, record the evidence document ID on this task, and provide a closure reason/request."
-    if task_type == "Registration completion":
-        return "Complete the EUC registration fields, including owner/reviewer, business unit, BCBS 239 mapping/scope indicators, schedule/cut-off, storage and dependency details."
-    return "Review the task title and description, complete the requested action, upload supporting evidence only if the task requires evidence, and update the task status/closure response."
+def artifact_upload_guidance(document_type: str) -> str:
+    doc_type = canonical_document_type(document_type)
+    if not doc_type:
+        return "The app itself acts as the evidence index. Upload the required underlying artifacts rather than a separate index file."
+    return ARTIFACT_UPLOAD_GUIDANCE.get(
+        doc_type,
+        "Upload evidence sufficient for the reviewer to verify the requirement, control operation, owner, date, scope and conclusion.",
+    )
 
 
 def _default_email(username: str) -> str:
@@ -330,51 +255,13 @@ def bcbs239_outputs_table(active_only: bool = False) -> pd.DataFrame:
     return dataframe(sql, params)
 
 
-def bcbs239_output_options(active_only: bool = True, output_type: str | None = None) -> list[str]:
-    where = []
-    params: list[Any] = []
-    if active_only:
-        where.append("active_flag = 1")
-    if output_type:
-        where.append("output_type = ?")
-        params.append(output_type)
-    sql = "SELECT output_name FROM bcbs239_outputs"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY output_name"
-    rows = fetch_all(sql, tuple(params))
-    values = [row["output_name"] for row in rows if row.get("output_name")]
-    if values:
-        return values
-    return sorted(BCBS239_OUTPUTS) if output_type in (None, "Material Report") else []
-
-
-def active_user_options(role: str | None = None, include_blank: bool = False) -> list[str]:
-    sql = "SELECT username FROM user_profiles WHERE active_flag = 1"
-    params: list[Any] = []
-    if role:
-        sql += " AND role = ?"
-        params.append(role)
-    sql += " ORDER BY username"
-    rows = fetch_all(sql, tuple(params))
-    values = [row["username"] for row in rows if row.get("username")]
-    if not values:
-        if role:
-            values = ROLE_USERNAMES.get(role, [])
-        else:
-            values = sorted({u for users in ROLE_USERNAMES.values() for u in users})
-    return ([""] if include_blank else []) + values
-
-
-def reference_options(category: str, fallback: list[str] | None = None, include_blank: bool = False) -> list[str]:
+def bcbs239_output_options(active_only: bool = True) -> list[str]:
     rows = fetch_all(
-        "SELECT value FROM reference_data WHERE category = ? AND active_flag = 1 ORDER BY value",
-        (category,),
+        "SELECT output_name FROM bcbs239_outputs WHERE (? = 0 OR active_flag = 1) ORDER BY output_name",
+        (1 if active_only else 0,),
     )
-    values = [row["value"] for row in rows if row.get("value")]
-    if not values:
-        values = list(fallback or [])
-    return ([""] if include_blank else []) + values
+    values = [row["output_name"] for row in rows if row.get("output_name")]
+    return values or sorted(BCBS239_OUTPUTS)
 
 
 def upsert_bcbs239_output(payload: dict[str, Any], performed_by: str) -> int:
@@ -1443,7 +1330,7 @@ def validate_mapping_fields(payload: dict[str, Any]) -> list[str]:
 
 
 def create_euc(payload: dict[str, Any], username: str) -> int:
-    mandatory = ["name", "legal_entity", "owner", "business_unit", "technology_type", "storage_location", "bcbs239_output_mapping"]
+    mandatory = ["name", "owner", "business_unit", "technology_type", "storage_location", "bcbs239_output_mapping"]
     missing = [field for field in mandatory if not str(payload.get(field, "")).strip()]
     errors = [f"Missing mandatory field: {field}" for field in missing] + validate_mapping_fields(payload)
     if errors:
@@ -1451,33 +1338,51 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
 
     now = utc_now()
     reference_id = generate_reference_id()
-    euc_fields = [
-        "reference_id", "name", "description", "purpose", "legal_entity", "owner", "owner_delegate", "reviewer",
-        "business_unit", "technology_type", "storage_location", "frequency", "schedule", "cut_off", "business_context",
-        "supports_material_report", "supports_material_kri", "supports_material_model", "multi_bu_use", "active_user_count",
-        "created_by_bu", "acquired_third_party_cots", "support_contract_sla", "last_risk_assessment_date",
-        "bcbs239_output_mapping", "inputs", "outputs", "recipients", "dependencies", "spof_indicator",
-        "inherent_risk", "residual_risk", "overall_status", "documentation_completeness_status", "lifecycle_status",
-        "next_review_date", "industrialization_rationale", "decommissioning_rationale", "created_by", "created_at", "updated_at",
-        "mapping_na_justification",
-    ]
-    values_by_field = {
-        **payload,
-        "reference_id": reference_id,
-        "spof_indicator": payload.get("spof_indicator", "No"),
-        "inherent_risk": payload.get("inherent_risk", "Medium"),
-        "residual_risk": payload.get("residual_risk", "Medium"),
-        "overall_status": payload.get("overall_status", "Registered"),
-        "documentation_completeness_status": "Not Checked",
-        "lifecycle_status": payload.get("lifecycle_status", "Registered"),
-        "created_by": username,
-        "created_at": now,
-        "updated_at": now,
-    }
-    placeholders = ", ".join("?" for _ in euc_fields)
     euc_id = execute(
-        f"INSERT INTO eucs({', '.join(euc_fields)}) VALUES ({placeholders})",
-        tuple(values_by_field.get(field) for field in euc_fields),
+        """
+        INSERT INTO eucs(
+            reference_id, name, description, purpose, owner, owner_delegate, business_unit, technology_type,
+            storage_location, frequency, schedule, cut_off, business_context, bcbs239_output_mapping, cde_linkage,
+            inputs, outputs, recipients, dependencies, spof_indicator, inherent_risk, residual_risk,
+            overall_status, documentation_completeness_status, lifecycle_status, next_review_date,
+            industrialization_rationale, decommissioning_rationale, created_by, created_at, updated_at,
+            mapping_na_justification
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            reference_id,
+            payload.get("name"),
+            payload.get("description"),
+            payload.get("purpose"),
+            payload.get("owner"),
+            payload.get("owner_delegate"),
+            payload.get("business_unit"),
+            payload.get("technology_type"),
+            payload.get("storage_location"),
+            payload.get("frequency"),
+            payload.get("schedule"),
+            payload.get("cut_off"),
+            payload.get("business_context"),
+            payload.get("bcbs239_output_mapping"),
+            payload.get("cde_linkage"),
+            payload.get("inputs"),
+            payload.get("outputs"),
+            payload.get("recipients"),
+            payload.get("dependencies"),
+            payload.get("spof_indicator", "No"),
+            payload.get("inherent_risk", "Medium"),
+            payload.get("residual_risk", "Medium"),
+            payload.get("overall_status", "Registered"),
+            "Not Checked",
+            payload.get("lifecycle_status", "Registered"),
+            payload.get("next_review_date"),
+            payload.get("industrialization_rationale"),
+            payload.get("decommissioning_rationale"),
+            username,
+            now,
+            now,
+            payload.get("mapping_na_justification"),
+        ),
     )
     insert_audit("EUC", euc_id, "CREATE", username, None, {"reference_id": reference_id, "name": payload.get("name")})
     create_task(
@@ -1512,6 +1417,7 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
     )
     return euc_id
 
+
 def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
     old = get_euc(euc_id)
     if not old:
@@ -1523,10 +1429,8 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "name",
         "description",
         "purpose",
-        "legal_entity",
         "owner",
         "owner_delegate",
-        "reviewer",
         "business_unit",
         "technology_type",
         "storage_location",
@@ -1534,16 +1438,8 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "schedule",
         "cut_off",
         "business_context",
-        "supports_material_report",
-        "supports_material_kri",
-        "supports_material_model",
-        "multi_bu_use",
-        "active_user_count",
-        "created_by_bu",
-        "acquired_third_party_cots",
-        "support_contract_sla",
-        "last_risk_assessment_date",
         "bcbs239_output_mapping",
+        "cde_linkage",
         "inputs",
         "outputs",
         "recipients",
@@ -1583,76 +1479,33 @@ def update_euc_status(euc_id: int, lifecycle_status: str, username: str, overall
 
 
 def get_components(euc_id: int) -> pd.DataFrame:
-    return dataframe(
-        """
-        SELECT c.*, e.reference_id AS parent_reference_id, e.name AS euc_application, e.business_unit AS parent_business_unit
-        FROM components c
-        JOIN eucs e ON e.euc_id = c.euc_id
-        WHERE c.euc_id = ?
-        ORDER BY c.component_id
-        """,
-        (euc_id,),
-    )
+    return dataframe("SELECT * FROM components WHERE euc_id = ? ORDER BY component_id", (euc_id,))
 
 
 def get_component(component_id: int) -> dict[str, Any] | None:
-    return fetch_one(
-        """
-        SELECT c.*, e.reference_id AS parent_reference_id, e.name AS euc_application, e.business_unit AS parent_business_unit
-        FROM components c
-        JOIN eucs e ON e.euc_id = c.euc_id
-        WHERE c.component_id = ?
-        """,
-        (component_id,),
-    )
-
-
-COMPONENT_FIELDS = [
-    "euc_id", "component_name", "component_type", "technology", "storage_location", "description", "criticality", "owner",
-    "rrf_mapping", "operationalization_document_link", "file_description", "technology_type", "controlled_storage_type",
-    "controlled_storage_location", "input_sources", "asset_cut_off", "processing_schedule", "execution_frequency",
-    "cde_mappings", "data_outputs", "level_of_automation", "backup_recovery_arrangements", "spof_risk",
-    "modification_date", "review_date",
-]
-
-
-def _component_insert_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    technology_type = payload.get("technology_type") or payload.get("component_type") or payload.get("technology") or "Other"
-    storage_location = payload.get("controlled_storage_location") or payload.get("storage_location")
-    file_description = payload.get("file_description") or payload.get("description")
-    return {
-        **payload,
-        "component_name": payload.get("component_name") or payload.get("asset_name"),
-        "component_type": payload.get("component_type") or technology_type or "Other",
-        "technology": payload.get("technology") or technology_type,
-        "storage_location": payload.get("storage_location") or storage_location,
-        "description": payload.get("description") or file_description,
-        "file_description": file_description,
-        "technology_type": technology_type,
-        "controlled_storage_location": storage_location,
-    }
+    return fetch_one("SELECT * FROM components WHERE component_id = ?", (component_id,))
 
 
 def create_component(payload: dict[str, Any], username: str) -> int:
     now = utc_now()
-    payload = _component_insert_payload(payload)
-    if not str(payload.get("component_name") or "").strip():
-        raise ValueError("Asset / file name is required.")
-    fields = COMPONENT_FIELDS + ["created_at"]
-    values_by_field = {**payload, "created_at": now}
     component_id = execute(
-        f"INSERT INTO components({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)})",
-        tuple(values_by_field.get(field) for field in fields),
+        """
+        INSERT INTO components(euc_id, component_name, component_type, technology, storage_location, description, criticality, owner, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["euc_id"],
+            payload["component_name"],
+            payload["component_type"],
+            payload.get("technology"),
+            payload.get("storage_location"),
+            payload.get("description"),
+            payload.get("criticality"),
+            payload.get("owner"),
+            now,
+        ),
     )
     insert_audit("Component", component_id, "CREATE", username, None, payload)
-    queue_raci_notifications(
-        "EUC_COMPONENT_UPDATED",
-        "Component",
-        component_id,
-        payload.get("euc_id"),
-        username,
-        context={"Component": payload.get("component_name"), "Action": "Created"},
-    )
     return component_id
 
 
@@ -1660,16 +1513,14 @@ def update_component(component_id: int, payload: dict[str, Any], username: str) 
     old = get_component(component_id)
     if not old:
         raise ValueError("Component not found")
-    payload = _component_insert_payload(payload)
-    if not str(payload.get("component_name") or old.get("component_name") or "").strip():
-        raise ValueError("Asset / file name is required.")
-    allowed_fields = [field for field in COMPONENT_FIELDS if field != "euc_id"]
+    allowed_fields = ["component_name", "component_type", "technology", "storage_location", "description", "criticality", "owner"]
     assignments = ", ".join([f"{field} = ?" for field in allowed_fields])
     values = [payload.get(field, old.get(field)) for field in allowed_fields]
     values.append(component_id)
     execute(f"UPDATE components SET {assignments} WHERE component_id = ?", tuple(values))
     insert_audit("Component", component_id, "UPDATE", username, old, payload)
     queue_raci_notifications("EUC_COMPONENT_UPDATED", "Component", component_id, old.get("euc_id"), username, context={"Component": payload.get("component_name", old.get("component_name"))})
+
 
 def get_risk_assessments(euc_id: int) -> pd.DataFrame:
     return dataframe("SELECT * FROM risk_assessments WHERE euc_id = ? ORDER BY version DESC", (euc_id,))
@@ -1788,11 +1639,10 @@ def create_risk_assessment(payload: dict[str, Any], username: str) -> int:
     execute(
         """
         UPDATE eucs
-        SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?,
-            last_risk_assessment_date = ?, updated_at = ?
+        SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?, updated_at = ?
         WHERE euc_id = ?
         """,
-        (inherent_risk, residual_risk, lifecycle, lifecycle, payload.get("assessment_date", date.today().isoformat()), utc_now(), payload["euc_id"]),
+        (inherent_risk, residual_risk, lifecycle, lifecycle, utc_now(), payload["euc_id"]),
     )
     insert_audit("Risk Assessment", assessment_id, "CREATE", username, None, {**payload, **calculated, "inherent_risk": inherent_risk, "residual_risk": residual_risk})
     queue_raci_notifications(
@@ -1873,8 +1723,8 @@ def recalculate_risk_assessment(assessment_id: int, username: str = "system", wr
     latest = latest_risk_assessment(int(row["euc_id"]))
     if latest and int(latest["assessment_id"]) == int(assessment_id):
         execute(
-            "UPDATE eucs SET inherent_risk = ?, residual_risk = ?, last_risk_assessment_date = ?, updated_at = ? WHERE euc_id = ?",
-            (inherent_risk, residual_risk, row.get("assessment_date"), utc_now(), row["euc_id"]),
+            "UPDATE eucs SET inherent_risk = ?, residual_risk = ?, updated_at = ? WHERE euc_id = ?",
+            (inherent_risk, residual_risk, utc_now(), row["euc_id"]),
         )
     if write_audit:
         insert_audit("Risk Assessment", assessment_id, "RECALCULATE", username, old_snapshot, calculated)
@@ -2055,8 +1905,8 @@ def update_risk_assessment_in_place(assessment_id: int, payload: dict[str, Any],
     latest = latest_risk_assessment(int(old["euc_id"]))
     if latest and int(latest["assessment_id"]) == int(assessment_id):
         execute(
-            "UPDATE eucs SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?, last_risk_assessment_date = ?, updated_at = ? WHERE euc_id = ?",
-            (inherent_risk, residual_risk, "Awaiting Documentation", "Awaiting Documentation", payload.get("assessment_date"), utc_now(), old["euc_id"]),
+            "UPDATE eucs SET inherent_risk = ?, residual_risk = ?, lifecycle_status = ?, overall_status = ?, updated_at = ? WHERE euc_id = ?",
+            (inherent_risk, residual_risk, "Awaiting Documentation", "Awaiting Documentation", utc_now(), old["euc_id"]),
         )
     insert_audit("Risk Assessment", assessment_id, "EDIT", username, old, {**payload, **calculated, "status": "Submitted"})
     queue_raci_notifications(
@@ -2185,7 +2035,8 @@ def _default_rule_metadata(doc_type: str) -> tuple[str, str]:
     descriptive tags for the checklist; the requirement driver remains the
     policy baseline and lifecycle/event condition.
     """
-    if doc_type in {"Operating Procedure", "Evidence Pack Index"}:
+    doc_type = canonical_document_type(doc_type) or doc_type
+    if doc_type in {"Operating Procedure"}:
         return "Ownership & Accountability", "Traceability"
     if doc_type in {"Library of Controls", "Control Evidence"}:
         return "Reconciliation & Controls", "Completeness"
@@ -2193,13 +2044,13 @@ def _default_rule_metadata(doc_type: str) -> tuple[str, str]:
         return "Data Validation", "Accuracy"
     if doc_type in {"Reconciliation Evidence"}:
         return "Reconciliation & Controls", "Reasonableness"
-    if doc_type in {"Resilience Evidence", "Containment / Correction Evidence"}:
+    if doc_type in {"Resilience Evidence", "Incident & RCA Evidence"}:
         return "Operational Resilience", "Timeliness"
-    if doc_type in {"Versioning / Change Log Evidence", "Change Evidence"}:
+    if doc_type in {"Change & Versioning Evidence"}:
         return "Change Management", "Consistency"
     if doc_type in {"Access Review Evidence", "Access Revocation Evidence"}:
         return "Access Control", "Traceability"
-    if doc_type in {"Exception Record", "Exception Closure Evidence", "Incident Evidence", "Incident RCA Evidence"}:
+    if doc_type in {"Exception Record", "Exception Closure Evidence", "Incident & RCA Evidence"}:
         return "Issue Management", "Traceability"
     if doc_type in {"Decommissioning Evidence", "Archive Evidence"}:
         return "Decommissioning", "Traceability"
@@ -2331,9 +2182,7 @@ def _event_overlay_requirements(euc: dict[str, Any], baseline_risk: str) -> list
     open_incidents = get_incidents(euc_id, open_only=True)
     if not open_incidents.empty or lifecycle == "Incident Open":
         overlays.extend([
-            ("Incident Evidence", "Incident Open", "Open incident or near miss requires incident evidence."),
-            ("Incident RCA Evidence", "Incident Open", "Incident handling requires root-cause analysis evidence."),
-            ("Containment / Correction Evidence", "Incident Open", "Incident handling requires containment/correction evidence."),
+            ("Incident & RCA Evidence", "Incident Open", "Open incident or near miss requires incident and RCA evidence."),
             ("Operating Procedure", "Incident Open", "Post-incident hardening may require refreshed operating procedure."),
             ("Library of Controls", "Incident Open", "Post-incident hardening may require refreshed control library."),
             ("Risk Assessment", "Incident Open", "Incident may require reassessment of inherent, controls and residual risk."),
@@ -2348,10 +2197,7 @@ def _event_overlay_requirements(euc: dict[str, Any], baseline_risk: str) -> list
     changes = get_material_changes(euc_id)
     open_changes = changes[~changes["status"].isin(["Closed", "Cancelled", "Withdrawn"])] if not changes.empty and "status" in changes.columns else changes
     if not open_changes.empty or lifecycle in {"Under Change", "Awaiting Reassessment"}:
-        overlays.extend([
-            ("Change Evidence", "Under Change", "Material change requires change request/rationale and impact evidence."),
-            ("Versioning / Change Log Evidence", "Under Change", "Material change requires release/version traceability."),
-        ])
+        overlays.append(("Change & Versioning Evidence", "Under Change", "Material change requires change request, impact assessment and release/version traceability."))
         if _risk_score(baseline_risk) >= _risk_score("High"):
             overlays.extend([
                 ("Testing Evidence", "Under Change", "High/Very High inherent material change requires testing evidence."),
@@ -2388,7 +2234,9 @@ def required_documents_for_euc(euc_id: int) -> pd.DataFrame:
     # are not dependent on whether the local required_artifact_rules table was
     # seeded before or after the policy-corrected interpretation.
     for doc_type in DEFAULT_REQUIRED_ARTIFACTS.get(baseline_risk, []):
-        _append_requirement(rows, seen, baseline_risk, "Active", doc_type, f"{reason_prefix}: {baseline_risk} baseline.")
+        canonical = canonical_document_type(doc_type)
+        if canonical:
+            _append_requirement(rows, seen, baseline_risk, "Active", canonical, f"{reason_prefix}: {baseline_risk} baseline.")
 
     # Also include administrator-approved rules for the inherent-risk baseline.
     rules = dataframe(
@@ -2400,8 +2248,8 @@ def required_documents_for_euc(euc_id: int) -> pd.DataFrame:
         (baseline_risk,),
     )
     for _, rule in rules.iterrows():
-        doc_type = rule["required_document_type"]
-        if doc_type in seen:
+        doc_type = canonical_document_type(rule["required_document_type"])
+        if not doc_type or doc_type in seen:
             continue
         rows.append(
             {
@@ -2427,6 +2275,9 @@ def required_documents_for_euc(euc_id: int) -> pd.DataFrame:
 def artifact_checklist(euc_id: int) -> pd.DataFrame:
     required = required_documents_for_euc(euc_id)
     docs = get_documents(euc_id)
+    if not docs.empty:
+        docs = docs.copy()
+        docs["document_type_canonical"] = docs["document_type"].apply(canonical_document_type)
     assessments = get_risk_assessments(euc_id)
     rows: list[dict[str, Any]] = []
     for _, req in required.iterrows():
@@ -2449,7 +2300,7 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
                     f"Owner submission status: {status}."
                 )
         else:
-            matching = docs[docs["document_type"] == doc_type] if not docs.empty else pd.DataFrame()
+            matching = docs[docs["document_type_canonical"] == doc_type] if not docs.empty else pd.DataFrame()
             assessment_id = None
             if matching.empty:
                 status = "Missing"
@@ -2476,7 +2327,6 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
                 "cacrt_dimension": req.get("cacrt_dimension"),
                 "requirement_reason": req.get("requirement_reason"),
                 "what_to_upload": artifact_upload_guidance(doc_type),
-                "what_user_should_do": artifact_user_action(doc_type, status),
                 "status": status,
                 "document_id": document_id,
                 "assessment_id": assessment_id,
@@ -3481,12 +3331,6 @@ POLICY_REPORTS = [
         "description": "Rule-based coverage of accepted/satisfied artifacts mapped to CACRT dimensions.",
     },
     {
-        "key": "cde_asset_mapping",
-        "name": "CDE mapping by EUC asset",
-        "policy_basis": "EUC Asset Inventory captures CDE mappings at asset/component level so CDE coverage can be aggregated from child assets to the parent EUC.",
-        "description": "Aggregates Critical Data Elements from EUC Asset Inventory rows by CDE, EUC, business unit and asset count.",
-    },
-    {
         "key": "incident_resolution",
         "name": "Incidents and resolution time",
         "policy_basis": "Policy 2.2.7 requires incidents and resolution-time KPIs.",
@@ -3528,7 +3372,6 @@ CUSTOM_REPORT_DATASETS = {
     "Incidents": "incidents",
     "Material Changes": "material_changes",
     "Components / Assets": "components",
-    "CDE Mapping / Asset Coverage": "cde_mapping_assets",
 }
 
 
@@ -3688,7 +3531,7 @@ def run_policy_report(report_key: str, filters: dict[str, Any] | None = None) ->
                    e.bcbs239_output_mapping,
                    CASE WHEN COALESCE(NULLIF(TRIM(e.bcbs239_output_mapping), ''), '') = '' THEN 'Missing mapping' ELSE 'Mapped' END AS mapping_status,
                    CASE WHEN {_accepted_doc_exists_sql('Operating Procedure')} THEN 'Accepted' ELSE 'Missing / not accepted' END AS operating_procedure_status,
-                   CASE WHEN {_accepted_doc_exists_sql('Evidence Pack Index')} THEN 'Accepted' ELSE 'Missing / not accepted' END AS evidence_index_status,
+                   CASE WHEN {_accepted_doc_exists_sql('Review Evidence')} THEN 'Accepted' ELSE 'Missing / not accepted' END AS review_evidence_status,
                    e.documentation_completeness_status, e.lifecycle_status, e.inherent_risk, e.residual_risk
             FROM eucs e
             WHERE {where}
@@ -3743,56 +3586,6 @@ def run_policy_report(report_key: str, filters: dict[str, Any] | None = None) ->
                 accepted = int(group["status"].isin(["Accepted"]).sum())
                 rows.append({**euc.to_dict(), "cacrt_dimension": dim, "required_artifacts": required, "accepted_or_satisfied": accepted, "coverage_pct": round(accepted / required * 100, 1) if required else 0.0})
         return pd.DataFrame(rows)
-    if report_key == "cde_asset_mapping":
-        asset_df = dataframe(
-            f"""
-            SELECT e.euc_id, e.reference_id, e.name AS euc_name, e.owner, e.business_unit,
-                   e.inherent_risk, e.residual_risk, c.component_id, c.component_name,
-                   c.cde_mappings, c.data_outputs, c.input_sources
-            FROM components c
-            JOIN eucs e ON e.euc_id = c.euc_id
-            WHERE {where}
-              AND c.cde_mappings IS NOT NULL
-              AND TRIM(c.cde_mappings) <> ''
-            ORDER BY e.reference_id, c.component_name
-            """,
-            tuple(params),
-        )
-        if asset_df.empty:
-            return pd.DataFrame()
-        rows: list[dict[str, Any]] = []
-        for _, item in asset_df.iterrows():
-            cdes = [part.strip() for part in re.split(r"[;,|]", str(item.get("cde_mappings") or "")) if part.strip()]
-            for cde in cdes:
-                rows.append({
-                    "cde_mapping": cde,
-                    "reference_id": item.get("reference_id"),
-                    "euc_name": item.get("euc_name"),
-                    "business_unit": item.get("business_unit"),
-                    "owner": item.get("owner"),
-                    "component_id": item.get("component_id"),
-                    "asset_name": item.get("component_name"),
-                    "input_sources": item.get("input_sources"),
-                    "data_outputs": item.get("data_outputs"),
-                    "inherent_risk": item.get("inherent_risk"),
-                    "residual_risk": item.get("residual_risk"),
-                })
-        exploded = pd.DataFrame(rows)
-        if exploded.empty:
-            return pd.DataFrame()
-        return (
-            exploded.groupby(["cde_mapping", "business_unit"], dropna=False)
-            .agg(
-                euc_count=("reference_id", "nunique"),
-                asset_count=("component_id", "nunique"),
-                eucs=("reference_id", lambda values: "; ".join(sorted(set(str(v) for v in values if str(v) != "nan")))),
-                owners=("owner", lambda values: "; ".join(sorted(set(str(v) for v in values if str(v) != "nan")))),
-                max_inherent_risk=("inherent_risk", lambda values: _max_risk([str(v) for v in values if str(v) and str(v) != "nan"] or ["Medium"])),
-                max_residual_risk=("residual_risk", lambda values: _max_risk([str(v) for v in values if str(v) and str(v) != "nan"] or ["Medium"])),
-            )
-            .reset_index()
-            .sort_values(["cde_mapping", "business_unit"])
-        )
     if report_key == "incident_resolution":
         return dataframe(
             f"""
@@ -3881,20 +3674,7 @@ def run_policy_report(report_key: str, filters: dict[str, Any] | None = None) ->
 
 def _custom_dataset_df(dataset: str) -> pd.DataFrame:
     if dataset == "EUC Portfolio":
-        # EUC-level CDE linkage is intentionally excluded; CDEs are now reported
-        # from child EUC Asset Inventory rows via c.cde_mappings.
-        return dataframe("""
-            SELECT euc_id, reference_id, name, description, purpose, legal_entity, owner, owner_delegate,
-                   reviewer, business_unit, technology_type, storage_location, frequency, schedule, cut_off,
-                   business_context, supports_material_report, supports_material_kri, supports_material_model,
-                   multi_bu_use, active_user_count, created_by_bu, acquired_third_party_cots, support_contract_sla,
-                   last_risk_assessment_date, bcbs239_output_mapping, inputs, outputs, recipients, dependencies,
-                   spof_indicator, inherent_risk, residual_risk, overall_status, documentation_completeness_status,
-                   lifecycle_status, next_review_date, industrialization_rationale, decommissioning_rationale,
-                   created_by, created_at, updated_at, mapping_na_justification
-            FROM eucs
-            ORDER BY reference_id
-        """)
+        return dataframe("SELECT * FROM eucs ORDER BY reference_id")
     if dataset == "Tasks":
         return get_tasks(open_only=False)
     if dataset == "Documents / Evidence":
@@ -3927,8 +3707,6 @@ def _custom_dataset_df(dataset: str) -> pd.DataFrame:
             SELECT m.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk
             FROM material_changes m JOIN eucs e ON e.euc_id = m.euc_id ORDER BY m.created_at DESC
         """)
-    if dataset == "CDE Mapping / Asset Coverage":
-        return run_policy_report("cde_asset_mapping", None)
     if dataset == "Components / Assets":
         return dataframe("""
             SELECT c.*, e.reference_id, e.name AS euc_name, e.owner AS euc_owner, e.business_unit, e.inherent_risk, e.residual_risk
@@ -4059,21 +3837,7 @@ def audit_trail(filters: dict[str, Any] | None = None) -> pd.DataFrame:
 
 def load_reference_data() -> dict[str, list[str]]:
     refs = dataframe("SELECT category, value FROM reference_data WHERE active_flag = 1 ORDER BY category, value")
-    result = {
-        "document_type": DOCUMENT_TYPES,
-        "lifecycle_status": LIFECYCLE_STATUSES,
-        "risk_level": RISK_LEVELS,
-        "control_area": CONTROL_AREAS,
-        "cacrt_dimension": CACRT_DIMENSIONS,
-        "task_type": TASK_TYPES,
-        "legal_entity": LEGAL_ENTITIES,
-        "business_unit": BUSINESS_UNITS,
-        "controlled_storage_type": CONTROLLED_STORAGE_TYPES,
-        "level_of_automation": LEVELS_OF_AUTOMATION,
-        "bcbs239_output_type": BCBS239_OUTPUT_TYPES,
-        "cde_mapping": CDE_LINKAGE_OPTIONS,
-        "cde_linkage": CDE_LINKAGE_OPTIONS,
-    }
+    result = {"document_type": DOCUMENT_TYPES, "lifecycle_status": LIFECYCLE_STATUSES, "risk_level": RISK_LEVELS, "control_area": CONTROL_AREAS, "cacrt_dimension": CACRT_DIMENSIONS, "task_type": TASK_TYPES}
     if refs.empty:
         return result
     for category in refs["category"].unique():
@@ -4233,13 +3997,6 @@ def initialize_reference_data(username: str = "system") -> None:
         "risk_level": RISK_LEVELS,
         "control_area": CONTROL_AREAS,
         "cacrt_dimension": CACRT_DIMENSIONS,
-        "legal_entity": LEGAL_ENTITIES,
-        "business_unit": BUSINESS_UNITS,
-        "controlled_storage_type": CONTROLLED_STORAGE_TYPES,
-        "level_of_automation": LEVELS_OF_AUTOMATION,
-        "bcbs239_output_type": BCBS239_OUTPUT_TYPES,
-        "cde_mapping": CDE_LINKAGE_OPTIONS,
-        "cde_linkage": CDE_LINKAGE_OPTIONS,
     }
     for category, values in constants.items():
         for value in values:
