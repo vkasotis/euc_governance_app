@@ -52,7 +52,16 @@ from schema import (
     TASK_TYPES,
     TECHNOLOGY_TYPES,
 )
+import schema as app_schema
 from seed_data import seed_database
+
+# Defensive fallback constants for deployments where schema.py is older than app.py.
+BUSINESS_UNITS = getattr(app_schema, "BUSINESS_UNITS", ["Risk Management", "Finance", "Treasury", "Retail Banking", "Corporate Banking", "Group Finance", "Group Risk", "Operations", "Compliance", "Other"])
+LEGAL_ENTITIES = getattr(app_schema, "LEGAL_ENTITIES", ["Eurobank S.A.", "Eurobank Holdings", "Eurobank Cyprus", "Eurobank Bulgaria", "Eurobank Private Bank Luxembourg", "Other"])
+CONTROLLED_STORAGE_TYPES = getattr(app_schema, "CONTROLLED_STORAGE_TYPES", ["Controlled SharePoint", "Controlled Network Drive", "Document Management System", "Code Repository", "Database", "Other"])
+LEVELS_OF_AUTOMATION = getattr(app_schema, "LEVELS_OF_AUTOMATION", ["Manual", "Semi-automated", "Automated", "Scheduled automated", "Other"])
+CDE_LINKAGE_OPTIONS = getattr(app_schema, "CDE_LINKAGE_OPTIONS", ["Customer ID", "Counterparty ID", "Account Number", "Facility ID", "Product Code", "Exposure Amount", "Outstanding Balance", "Collateral Value", "Currency", "Maturity Date", "Risk Weight", "Probability of Default", "Loss Given Default", "IFRS 9 Stage", "Impairment Allowance", "NPE Flag", "Forbearance Flag", "Liquidity Metric", "Capital Metric", "Other CDE"])
+BCBS239_OUTPUT_TYPES = getattr(app_schema, "BCBS239_OUTPUT_TYPES", ["Material Report", "Material KRI", "Material Model"])
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🏦", layout="wide")
 
@@ -733,6 +742,30 @@ def bcbs_output_selectbox(label: str, value: str | None = None, key: str | None 
         help="Primary mapping is mandatory and cannot be Not Applicable. Values come from the controlled BCBS 239 material reports inventory.",
         key=key,
     )
+
+
+def yes_no_selectbox(label: str, value: str | None = None, *, key: str | None = None, help: str | None = None) -> str:
+    """Render a stable Yes/No selectbox and normalize older truthy values to Yes."""
+    current = (value or "No").strip()
+    if current not in {"Yes", "No"}:
+        current = "Yes" if current else "No"
+    return st.selectbox(label, ["No", "Yes"], index=option_index(["No", "Yes"], current), key=key, help=help)
+
+
+def user_selectbox(label: str, value: str | None = None, *, key: str | None = None, include_blank: bool = True) -> str:
+    """Select a user from the User Directory while preserving older values."""
+    try:
+        users_df = svc.user_profiles_table(active_only=True)
+        users = users_df["username"].dropna().astype(str).tolist() if not users_df.empty else []
+    except Exception:
+        users = []
+    options = ([""] if include_blank else []) + users
+    current = (value or "").strip()
+    if current and current not in options:
+        options.append(current)
+    if not options:
+        options = [current] if current else [""]
+    return st.selectbox(label, options, index=option_index(options, current, 0), key=key)
 
 
 def display_value(value: Any) -> str:
