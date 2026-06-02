@@ -162,23 +162,90 @@ TECHNOLOGY_TYPES = [
 
 FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Ad hoc", "Event-driven"]
 
+LEGAL_ENTITIES = [
+    "Eurobank S.A.",
+    "Eurobank Holdings",
+    "Eurobank Cyprus",
+    "Eurobank Bulgaria",
+    "Eurobank Private Bank Luxembourg",
+    "Other",
+]
+
+BUSINESS_UNITS = [
+    "Risk Management",
+    "Finance",
+    "Treasury",
+    "Retail Banking",
+    "Corporate Banking",
+    "Operations",
+    "Data Governance",
+    "Group IT",
+    "Internal Audit",
+    "Other",
+]
+
+CONTROLLED_STORAGE_TYPES = [
+    "Controlled network folder",
+    "SharePoint / Teams controlled site",
+    "Git / controlled repository",
+    "Database / data warehouse",
+    "Approved EUC platform",
+    "Other controlled storage",
+]
+
+LEVELS_OF_AUTOMATION = [
+    "Manual",
+    "Semi-automated",
+    "Automated with manual trigger",
+    "Scheduled / automated",
+    "Other",
+]
+
+BCBS239_OUTPUT_TYPES = ["Material Report", "Material KRI", "Material Model"]
+
+# MVP configurable CDE list used by the EUC Inventory CDE linkage multi-select.
+# The values are seeded into reference_data and can be extended by administrators.
+CDE_LINKAGE_OPTIONS = [
+    "Customer ID",
+    "Counterparty ID",
+    "Account Number",
+    "Facility ID",
+    "Product Code",
+    "Exposure Amount",
+    "Outstanding Balance",
+    "Collateral Value",
+    "Currency",
+    "Maturity Date",
+    "Interest Rate",
+    "Risk Weight",
+    "Probability of Default",
+    "Loss Given Default",
+    "IFRS 9 Stage",
+    "Impairment Allowance",
+    "NPE Flag",
+    "Forbearance Flag",
+    "Liquidity Metric",
+    "Capital Metric",
+    "Other CDE",
+]
+
 DOCUMENT_TYPES = [
     "Risk Assessment",
     "Operating Procedure",
     "Library of Controls",
+    "Change & Versioning Evidence",
+    "Control Evidence",
+    "Design / Logic Evidence",
     "Testing Evidence",
     "UAT Evidence",
     "Approval Evidence",
     "Review Evidence",
     "Reconciliation Evidence",
     "Resilience Evidence",
+    "Access Review Evidence",
     "Exception Record",
     "Incident & RCA Evidence",
     "Decommissioning Evidence",
-    "Change & Versioning Evidence",
-    "Design / Logic Evidence",
-    "Control Evidence",
-    "Access Review Evidence",
     "Archive Evidence",
     "Access Revocation Evidence",
     "Industrialization Assessment Evidence",
@@ -243,11 +310,16 @@ REFERENCE_CATEGORIES = [
     "control_area",
     "cacrt_dimension",
     "due_date_rule",
+    "legal_entity",
+    "business_unit",
+    "controlled_storage_type",
+    "level_of_automation",
 ]
 
 DEFAULT_REQUIRED_ARTIFACTS = {
     # These policy baselines are driven by Overall Inherent Risk.
     # Residual risk drives remediation, escalation and exception handling, not a reduction of the evidence baseline.
+    # Design / Logic, Testing, UAT and Approval Evidence are added conditionally by lifecycle / applicability logic.
     "Low": [
         "Risk Assessment",
         "Operating Procedure",
@@ -264,7 +336,6 @@ DEFAULT_REQUIRED_ARTIFACTS = {
         "Operating Procedure",
         "Library of Controls",
         "Change & Versioning Evidence",
-        "Testing Evidence",
         "Reconciliation Evidence",
         "Review Evidence",
         "Access Review Evidence",
@@ -275,13 +346,9 @@ DEFAULT_REQUIRED_ARTIFACTS = {
         "Operating Procedure",
         "Library of Controls",
         "Change & Versioning Evidence",
-        "Design / Logic Evidence",
-        "Testing Evidence",
-        "UAT Evidence",
         "Reconciliation Evidence",
         "Resilience Evidence",
         "Review Evidence",
-        "Approval Evidence",
         "Access Review Evidence",
     ],
 }
@@ -497,8 +564,10 @@ CREATE_TABLES_SQL = [
         name TEXT NOT NULL,
         description TEXT,
         purpose TEXT,
+        legal_entity TEXT,
         owner TEXT NOT NULL,
         owner_delegate TEXT,
+        reviewer TEXT,
         business_unit TEXT NOT NULL,
         technology_type TEXT NOT NULL,
         storage_location TEXT NOT NULL,
@@ -506,14 +575,16 @@ CREATE_TABLES_SQL = [
         schedule TEXT,
         cut_off TEXT,
         business_context TEXT,
-        bcbs239_output_mapping TEXT NOT NULL,
-        supports_material_report TEXT DEFAULT 'No',
-        supports_material_kri TEXT DEFAULT 'No',
-        supports_material_model TEXT DEFAULT 'No',
-        reviewer TEXT,
-        legal_entity TEXT,
-        legacy_onboarding INTEGER DEFAULT 0,
+        supports_material_report TEXT,
+        supports_material_kri TEXT,
+        supports_material_model TEXT,
+        multi_bu_use TEXT,
+        active_user_count INTEGER,
+        created_by_bu TEXT,
+        acquired_third_party_cots TEXT,
+        support_contract_sla TEXT,
         last_risk_assessment_date TEXT,
+        bcbs239_output_mapping TEXT NOT NULL,
         cde_linkage TEXT,
         inputs TEXT,
         outputs TEXT,
@@ -531,7 +602,18 @@ CREATE_TABLES_SQL = [
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        mapping_na_justification TEXT
+        mapping_na_justification TEXT,
+        onboarding_type TEXT DEFAULT 'New EUC',
+        design_logic_applicable TEXT DEFAULT 'No',
+        design_logic_rationale TEXT,
+        euc_operationalization_document_link TEXT,
+        policy242_operationalization_link TEXT,
+        bcbs239_elevated_inherent_override TEXT DEFAULT 'No',
+        backup_path_documented TEXT,
+        last_restore_drill_date TEXT,
+        deputy_cover TEXT,
+        knowledge_transfer_evidence TEXT,
+        critical_dependencies_documented TEXT
     );
     """,
     """
@@ -545,13 +627,14 @@ CREATE_TABLES_SQL = [
         description TEXT,
         criticality TEXT,
         owner TEXT,
+        rrf_mapping TEXT,
         operationalization_document_link TEXT,
         file_description TEXT,
         technology_type TEXT,
         controlled_storage_type TEXT,
         controlled_storage_location TEXT,
         input_sources TEXT,
-        cut_off TEXT,
+        asset_cut_off TEXT,
         processing_schedule TEXT,
         execution_frequency TEXT,
         cde_mappings TEXT,
