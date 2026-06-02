@@ -28,36 +28,30 @@ except Exception:  # pragma: no cover - fallback if dependency is not installed 
 
 import services as svc
 from db import DATABASE_FILE, init_db, table_count
-import schema as app_schema
-
-APP_TITLE = getattr(app_schema, "APP_TITLE", "End-to-End EUC Governance Monitoring App")
-BANK_NAME = getattr(app_schema, "BANK_NAME", "Eurobank S.A.")
-APPROVAL_STATUSES = getattr(app_schema, "APPROVAL_STATUSES", ["Pending", "Approved", "Rejected", "Expired", "Withdrawn"])
-BCBS239_OUTPUT_TYPES = getattr(app_schema, "BCBS239_OUTPUT_TYPES", ["Material Report", "Material KRI", "Material Model"])
-BUSINESS_UNITS = getattr(app_schema, "BUSINESS_UNITS", ["Risk Management", "Finance", "Treasury", "Retail Banking", "Corporate Banking", "Group Finance", "Group Risk", "Operations", "Compliance", "Other"])
-CACRT_DIMENSIONS = getattr(app_schema, "CACRT_DIMENSIONS", ["Completeness", "Accuracy", "Consistency", "Reasonableness", "Timeliness", "Traceability"])
-CDE_LINKAGE_OPTIONS = getattr(app_schema, "CDE_LINKAGE_OPTIONS", ["Customer ID", "Counterparty ID", "Account Number", "Facility ID", "Product Code", "Exposure Amount", "Outstanding Balance", "Collateral Value", "Currency", "Maturity Date", "Risk Weight", "Probability of Default", "Loss Given Default", "IFRS 9 Stage", "Impairment Allowance", "NPE Flag", "Forbearance Flag", "Liquidity Metric", "Capital Metric", "Other CDE"])
-CHANGE_TYPES = getattr(app_schema, "CHANGE_TYPES", ["Logic", "Inputs", "Outputs", "Recipients", "Thresholds", "Security", "Storage", "Dependencies", "Platform", "Other"])
-CONTROL_AREAS = getattr(app_schema, "CONTROL_AREAS", ["Ownership & Accountability", "Inventory & Classification", "Data Inputs & Lineage", "Data Validation", "Change Management", "Access Control", "Operational Resilience", "Reconciliation & Controls", "Issue Management", "Decommissioning"])
-CONTROLLED_STORAGE_TYPES = getattr(app_schema, "CONTROLLED_STORAGE_TYPES", ["Controlled SharePoint", "Controlled Network Drive", "Document Management System", "Code Repository", "Database", "Other"])
-DIRECTORY_ROLES = getattr(app_schema, "DIRECTORY_ROLES", getattr(app_schema, "ROLES", []))
-DOCUMENT_STATUSES = getattr(app_schema, "DOCUMENT_STATUSES", ["Pending", "Submitted", "Accepted", "Rejected", "Expired", "Superseded", "Missing"])
-DOCUMENT_TYPES = getattr(app_schema, "DOCUMENT_TYPES", [])
-FINDING_SEVERITIES = getattr(app_schema, "FINDING_SEVERITIES", ["Low", "Medium", "High", "Critical"])
-FREQUENCIES = getattr(app_schema, "FREQUENCIES", ["Daily", "Weekly", "Monthly", "Quarterly", "Ad hoc", "Event-driven"])
-INCIDENT_STATUSES = getattr(app_schema, "INCIDENT_STATUSES", ["Open", "Contained", "RCA In Progress", "Remediation In Progress", "Closed"])
-LEGAL_ENTITIES = getattr(app_schema, "LEGAL_ENTITIES", ["Eurobank S.A.", "Eurobank Holdings", "Eurobank Cyprus", "Eurobank Bulgaria", "Eurobank Private Bank Luxembourg", "Other"])
-LEVELS_OF_AUTOMATION = getattr(app_schema, "LEVELS_OF_AUTOMATION", ["Manual", "Semi-automated", "Automated", "Scheduled automated", "Other"])
-LIFECYCLE_STATUSES = getattr(app_schema, "LIFECYCLE_STATUSES", [])
-OVERALL_STATUSES = getattr(app_schema, "OVERALL_STATUSES", [])
-PRIORITIES = getattr(app_schema, "PRIORITIES", ["Low", "Medium", "High", "Critical"])
-REVIEW_OUTCOMES = getattr(app_schema, "REVIEW_OUTCOMES", ["Accepted", "Accepted with comments", "Returned for remediation", "Finding raised"])
-REVIEW_TYPES = getattr(app_schema, "REVIEW_TYPES", ["Data Validation", "GCC Monitoring", "Closure Validation", "Periodic Review"])
-RISK_LEVELS = getattr(app_schema, "RISK_LEVELS", ["Low", "Medium", "High", "Very High"])
-ROLES = getattr(app_schema, "ROLES", ["EUC Owner", "EUC Owner Delegate / Contributor", "GCC", "Data Validation Unit", "Group IT Governance Administrator", "Approver / Head of Unit", "Internal Audit / Read-only User"])
-TASK_STATUSES = getattr(app_schema, "TASK_STATUSES", ["Open", "In Progress", "Blocked", "Closure Requested", "Closed", "Cancelled"])
-TASK_TYPES = getattr(app_schema, "TASK_TYPES", [])
-TECHNOLOGY_TYPES = getattr(app_schema, "TECHNOLOGY_TYPES", ["Excel", "Access", "Python script", "Notebook", "Report", "SQL script", "Manual process", "Other"])
+from schema import (
+    APP_TITLE,
+    BANK_NAME,
+    APPROVAL_STATUSES,
+    CACRT_DIMENSIONS,
+    CHANGE_TYPES,
+    CONTROL_AREAS,
+    DIRECTORY_ROLES,
+    DOCUMENT_STATUSES,
+    DOCUMENT_TYPES,
+    FINDING_SEVERITIES,
+    FREQUENCIES,
+    INCIDENT_STATUSES,
+    LIFECYCLE_STATUSES,
+    OVERALL_STATUSES,
+    PRIORITIES,
+    REVIEW_OUTCOMES,
+    REVIEW_TYPES,
+    RISK_LEVELS,
+    ROLES,
+    TASK_STATUSES,
+    TASK_TYPES,
+    TECHNOLOGY_TYPES,
+)
 from seed_data import seed_database
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🏦", layout="wide")
@@ -258,47 +252,6 @@ def require_write_access() -> bool:
     return True
 
 
-
-
-def task_user_action_guidance_safe(task: Any) -> str:
-    """Return task-action guidance without hard-failing on mismatched services.py.
-
-    Streamlit Cloud deployments can occasionally run a newer app.py against an
-    older services.py if the full package was not committed together. The main
-    implementation lives in services.task_user_action_guidance, but this wrapper
-    preserves startup/runtime safety and provides a conservative fallback.
-    """
-    service_fn = getattr(svc, "task_user_action_guidance", None)
-    if callable(service_fn):
-        try:
-            return str(service_fn(task))
-        except Exception:
-            pass
-    if isinstance(task, pd.Series):
-        row = task.to_dict()
-    else:
-        row = dict(task or {})
-    task_type = str(row.get("task_type") or "").strip()
-    title = str(row.get("title") or "").strip().lower()
-    description = str(row.get("description") or "").strip().lower()
-    text = f"{title} {description}"
-    if task_type in {"Risk assessment", "Reassessment"}:
-        return "Go to the Risk Assessment page, complete or amend the assessment, and submit it. Do not upload a separate risk-assessment file."
-    if task_type in {"Document submission", "Missing evidence", "Documentation refresh"}:
-        return "Go to Documents & Evidence Pack, review the Required Artifact Checklist, and upload or refresh the specific missing/rejected/expired artifact for this EUC."
-    if task_type == "Remediation":
-        return "Review the related finding or reviewer comment, fix the control/data/documentation gap, upload closure evidence where needed, and update the task."
-    if task_type == "Review response":
-        if "exception" in text:
-            return "Review the exception request and supporting evidence. Approvers should approve/reject in the Exceptions page; owners should address comments if returned."
-        return "Review the GCC/Data Validation comments, respond to each point, upload any requested evidence, and update the task response."
-    if task_type == "Closure evidence":
-        return "Upload evidence proving the remediation/action is complete, record the evidence document ID if applicable, and provide a closure reason."
-    if task_type == "Registration completion":
-        return "Complete the EUC registration fields, including ownership, business unit, BCBS 239 mapping/scope indicators, schedule/cut-off, storage and dependency details."
-    return "Review the task title and description, complete the requested action, upload supporting evidence only where required, and update the task status/closure response."
-
-
 def badge(value: Any) -> str:
     if value is None or value == "":
         return "—"
@@ -357,27 +310,14 @@ def _labelize_column(column: Any) -> str:
     return " ".join(rendered)
 
 
-def _estimate_grid_column_width(series: Any, header: str) -> int:
-    """Estimate a readable AgGrid width while tolerating duplicate columns.
-
-    Pandas returns a DataFrame rather than a Series when a dataframe contains
-    duplicate column names and is accessed as df[column]. This helper must not
-    assume a Series, because joined reporting/asset datasets can occasionally
-    contain duplicate names after migrations or user-defined custom reports.
-    """
-    name = str(header or "").lower()
+def _estimate_grid_column_width(series: pd.Series, header: str) -> int:
+    """Estimate a readable AgGrid width while still allowing horizontal scroll."""
     try:
-        if isinstance(series, pd.DataFrame):
-            sample_values: list[str] = []
-            for col in series.columns[:3]:
-                sample_values.extend(series[col].dropna().astype(str).head(20).tolist())
-            sample = sample_values[:50]
-        else:
-            sample = series.dropna().astype(str).head(50).tolist()
-            name = str(getattr(series, "name", header) or header).lower()
+        sample = series.dropna().astype(str).head(50).tolist()
     except Exception:
         sample = []
     longest_value = max([len(str(header)), *[len(v) for v in sample]], default=len(str(header)))
+    name = str(series.name).lower()
 
     if name.endswith("_id") or name in {"id", "version", "mandatory", "active", "active_flag"}:
         return max(95, min(150, 18 + longest_value * 7))
@@ -388,34 +328,6 @@ def _estimate_grid_column_width(series: Any, header: str) -> int:
     if any(token in name for token in ["date", "at", "due", "expiry", "review"]):
         return max(140, min(210, 28 + longest_value * 7))
     return max(160, min(360, 28 + longest_value * 7))
-
-
-def _deduplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a dataframe with unique column names for AgGrid.
-
-    AgGrid and Pandas column lookups are more predictable when every column name
-    is unique. Duplicate names are preserved with a numbered suffix for display
-    rather than causing runtime failures in grid configuration.
-    """
-    if df is None or df.empty:
-        return df
-    seen: dict[str, int] = {}
-    columns: list[str] = []
-    changed = False
-    for col in df.columns:
-        base = str(col)
-        count = seen.get(base, 0)
-        if count:
-            columns.append(f"{base}_{count + 1}")
-            changed = True
-        else:
-            columns.append(base)
-        seen[base] = count + 1
-    if not changed:
-        return df
-    out = df.copy()
-    out.columns = columns
-    return out
 
 
 def _build_grid_options(
@@ -507,7 +419,7 @@ def safe_df(df: pd.DataFrame, height: int | str | None = None, *, key: str | Non
         st.info("No records found for the current filters.")
         return
 
-    display_df = _deduplicate_columns(df.copy())
+    display_df = df.copy()
     if AGGRID_AVAILABLE:
         AgGrid(
             display_df,
@@ -561,7 +473,7 @@ def selectable_df(
         st.info("No records found for the current filters.")
         return []
 
-    display_df = _deduplicate_columns(df.copy())
+    display_df = df.copy()
     if not AGGRID_AVAILABLE:
         safe_df(display_df, height=height, key=key)
         return []
@@ -819,94 +731,6 @@ def bcbs_output_selectbox(label: str, value: str | None = None, key: str | None 
         index=option_index(options, current, 0),
         format_func=lambda x: "Select BCBS 239 material report/output" if x == "" else x,
         help="Primary mapping is mandatory and cannot be Not Applicable. Values come from the controlled BCBS 239 material reports inventory.",
-        key=key,
-    )
-
-
-
-
-def reference_selectbox(category: str, label: str, fallback: list[str], value: str | None = None, *, key: str | None = None, help: str | None = None) -> str:
-    options = svc.reference_options(category, fallback=fallback, include_blank=False)
-    current = (value or "").strip()
-    if current and current not in options:
-        options.append(current)
-    return st.selectbox(label, options, index=option_index(options, current, 0), key=key, help=help)
-
-
-def user_selectbox(label: str, value: str | None = None, *, key: str | None = None, include_blank: bool = False, role: str | None = None, help: str | None = None) -> str:
-    options = svc.active_user_options(role=role, include_blank=include_blank)
-    current = (value or "").strip()
-    if current and current not in options:
-        options.append(current)
-    return st.selectbox(label, options, index=option_index(options, current, 0), key=key, help=help)
-
-
-def yes_no_index(value: Any, default: str = "No") -> int:
-    text = str(value or default).strip().lower()
-    if text in {"yes", "y", "true", "1"}:
-        return 1
-    # Older app versions stored the selected report/KRI/model name here. Any
-    # non-empty value other than Not Applicable/No is interpreted as Yes during
-    # display/edit so old records do not appear incorrectly as No.
-    if text and text not in {"no", "n", "false", "0", "not applicable", "n/a", "na", "none"}:
-        return 1
-    return 0
-
-
-def bcbs_material_selectbox(label: str, output_type: str | None = None, value: str | None = None, *, key: str | None = None) -> str:
-    return st.selectbox(
-        label,
-        ["No", "Yes"],
-        index=yes_no_index(value),
-        key=key,
-        help="Select Yes if this EUC supports an in-scope output under the 241 BCBS 239 Overarching Framework. The specific primary report/output mapping is selected separately below.",
-    )
-
-
-def _split_multi_value(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, (list, tuple, set)):
-        return [str(v).strip() for v in value if str(v).strip()]
-    text = str(value).strip()
-    if not text:
-        return []
-    parts = re.split(r"[;,|]", text)
-    return [part.strip() for part in parts if part.strip()]
-
-
-def cde_linkage_multiselect(label: str, value: str | None = None, *, key: str | None = None) -> str:
-    options = svc.reference_options("cde_linkage", fallback=CDE_LINKAGE_OPTIONS, include_blank=False)
-    current = _split_multi_value(value)
-    for item in current:
-        if item not in options:
-            options.append(item)
-    selected = st.multiselect(
-        label,
-        options,
-        default=[item for item in current if item in options],
-        key=key,
-        help="Select one or more Critical Data Elements linked to this EUC. Administrators can maintain the CDE list in Admin Configuration reference data.",
-    )
-    return "; ".join(selected)
-
-
-def bcbs_any_mapping_selectbox(label: str, value: str | None = None, *, key: str | None = None, include_blank: bool = True) -> str:
-    options: list[str] = []
-    if include_blank:
-        options.append("")
-    for output_type in BCBS239_OUTPUT_TYPES:
-        for item in svc.bcbs239_output_options(active_only=True, output_type=output_type):
-            if item not in options:
-                options.append(item)
-    current = (value or "").strip()
-    if current and current not in options:
-        options.append(current)
-    return st.selectbox(
-        label,
-        options,
-        index=option_index(options, current, 0),
-        format_func=lambda x: "Select mapped report / KRI / model" if x == "" else x,
         key=key,
     )
 
@@ -1285,7 +1109,7 @@ def page_inventory() -> None:
         filtered = filtered[filtered["residual_risk"] == risk]
     if status != "All":
         filtered = filtered[filtered["lifecycle_status"] == status]
-    show_cols = ["euc_id", "reference_id", "name", "legal_entity", "business_unit", "owner", "reviewer", "technology_type", "supports_material_report", "supports_material_kri", "supports_material_model", "last_risk_assessment_date", "inherent_risk", "residual_risk", "lifecycle_status", "documentation_completeness_status", "spof_indicator", "next_review_date"]
+    show_cols = ["euc_id", "reference_id", "name", "owner", "business_unit", "technology_type", "residual_risk", "lifecycle_status", "documentation_completeness_status", "spof_indicator", "next_review_date"]
     safe_df(filtered[show_cols], height=500)
     csv_download(filtered[show_cols], "euc_inventory.csv")
     if not filtered.empty:
@@ -1306,14 +1130,14 @@ def page_register() -> None:
         return
 
     with st.form("register_euc"):
-        st.subheader("Core EUC inventory information")
+        st.subheader("Core EUC information")
         c1, c2 = st.columns(2)
-        name = c1.text_input("EUC Application Name *")
-        legal_entity = reference_selectbox("legal_entity", "Legal Entity *", LEGAL_ENTITIES, key="register_legal_entity")
-        business_unit = reference_selectbox("business_unit", "Business Unit *", BUSINESS_UNITS, key="register_business_unit")
-        owner = user_selectbox("Owner *", username if role == svc.OWNER_ROLE else None, key="register_owner")
-        owner_delegate = user_selectbox("Owner delegate / contributor", None, key="register_delegate", include_blank=True, role=svc.CONTRIBUTOR_ROLE)
-        reviewer = user_selectbox("Reviewer", None, key="register_reviewer", include_blank=True)
+        name = c1.text_input("EUC name *")
+        owner = c2.selectbox("Owner *", [""] + list(svc.user_profiles_table(active_only=True)["username"].astype(str).tolist()), help="Select the EUC owner from the user directory.")
+        owner_delegate = c1.selectbox("Owner delegate / contributor", [""] + list(svc.user_profiles_table(active_only=True)["username"].astype(str).tolist()), help="Select an optional delegate/contributor from the user directory.")
+        business_unit = c2.selectbox("Business unit *", BUSINESS_UNITS, index=option_index(BUSINESS_UNITS, "Risk Management"), help="Select the owning business unit.")
+        legal_entity = c1.selectbox("Legal entity *", LEGAL_ENTITIES, index=0)
+        reviewer = c2.selectbox("Reviewer", [""] + list(svc.user_profiles_table(active_only=True)["username"].astype(str).tolist()), help="Select an optional reviewer from the user directory.")
         technology_type = c1.selectbox("Technology type *", TECHNOLOGY_TYPES)
         storage_location = c2.text_input("Storage location *", value="//eurobank/euc/")
         description = st.text_area(
@@ -1324,36 +1148,6 @@ def page_register() -> None:
             "Purpose",
             help="Describe what the EUC is used for and what output it produces or supports.",
         )
-
-        st.subheader("BCBS 239 scope indicators")
-        r1, r2, r3 = st.columns(3)
-        with r1:
-            supports_material_report = bcbs_material_selectbox(
-                "Supports Material Report in scope under 241 BCBS 239 Overarching Framework?",
-                "Material Report",
-                key="register_supports_report",
-            )
-        with r2:
-            supports_material_kri = bcbs_material_selectbox(
-                "Supports Material KRI in scope under 241 BCBS 239 Overarching Framework?",
-                "Material KRI",
-                key="register_supports_kri",
-            )
-        with r3:
-            supports_material_model = bcbs_material_selectbox(
-                "Supports Material Model in scope under 241 BCBS 239 Overarching Framework?",
-                "Material Model",
-                key="register_supports_model",
-            )
-
-        st.subheader("Usage and sourcing")
-        u1, u2, u3 = st.columns(3)
-        multi_bu_use = u1.selectbox("In use by two or more distinct BUs?", ["No", "Yes"], key="register_multi_bu")
-        active_user_count = u2.number_input("Number of Active Users", min_value=0, step=1, value=1)
-        created_by_bu = u3.selectbox("Created by the BU?", ["Yes", "No"], key="register_created_by_bu")
-        s1, s2 = st.columns(2)
-        acquired_third_party_cots = s1.selectbox("Acquired by third-party / COTS?", ["No", "Yes"], key="register_cots")
-        support_contract_sla = s2.selectbox("Support contract / SLA in place?", ["No", "Yes", "Not Applicable"], key="register_sla")
 
         st.subheader("Mapping and operating context")
         c3, c4, c5 = st.columns(3)
@@ -1374,8 +1168,11 @@ def page_register() -> None:
             "Business / reporting context",
             help="Explain why this EUC matters in the business or reporting process, including downstream reports, decisions, controls or BCBS 239 relevance.",
         )
-        bcbs_mapping = bcbs_output_selectbox("Primary BCBS 239 output mapping *", None, key="register_bcbs239_output")
-        cde_linkage = cde_linkage_multiselect("CDE linkage (optional)", key="register_cde_linkage")
+        bcbs_mapping = bcbs_output_selectbox("BCBS 239 output mapping *", key="register_bcbs239_output")
+        supports_material_report = yes_no_selectbox("Supports Material Report?", key="register_supports_report", help="Select Yes if this EUC supports a material report under Policy 241 BCBS 239 Overarching Framework.")
+        supports_material_kri = yes_no_selectbox("Supports Material KRI?", key="register_supports_kri", help="Select Yes if this EUC supports a material KRI under Policy 241 BCBS 239 Overarching Framework.")
+        supports_material_model = yes_no_selectbox("Supports Material Model?", key="register_supports_model", help="Select Yes if this EUC supports a material model under Policy 241 BCBS 239 Overarching Framework.")
+        legacy_onboarding = st.radio("Legacy onboarding / existing active EUC?", ["No", "Yes"], horizontal=True, help="Select Yes when onboarding an existing active EUC under the legacy current-state approach.")
         inputs = st.text_area("Inputs")
         outputs = st.text_area("Outputs")
         recipients = st.text_area("Recipients")
@@ -1383,7 +1180,7 @@ def page_register() -> None:
         spof = st.radio("SPOF indicator", ["No", "Yes"], horizontal=True)
         mapping_na_justification = st.text_area("Not Applicable justification", help="Required if any mapping field is 'Not Applicable'.")
         lifecycle_status = st.selectbox("Initial lifecycle status", ["Draft", "Submitted", "Registered"], index=2)
-        next_review_date = st.date_input("Next Risk Assessment / review date", value=date.today() + timedelta(days=90))
+        next_review_date = st.date_input("Next review date", value=date.today() + timedelta(days=90))
         submitted = st.form_submit_button("Register EUC")
 
     if submitted:
@@ -1394,27 +1191,22 @@ def page_register() -> None:
                     "name": name,
                     "description": description,
                     "purpose": purpose,
-                    "legal_entity": legal_entity,
                     "owner": owner,
                     "owner_delegate": owner_delegate,
-                    "reviewer": reviewer,
                     "business_unit": business_unit,
+                    "legal_entity": legal_entity,
+                    "reviewer": reviewer,
                     "technology_type": technology_type,
                     "storage_location": storage_location,
                     "frequency": frequency,
                     "schedule": schedule,
                     "cut_off": cut_off,
                     "business_context": business_context,
+                    "bcbs239_output_mapping": bcbs_mapping,
                     "supports_material_report": supports_material_report,
                     "supports_material_kri": supports_material_kri,
                     "supports_material_model": supports_material_model,
-                    "multi_bu_use": multi_bu_use,
-                    "active_user_count": int(active_user_count),
-                    "created_by_bu": created_by_bu,
-                    "acquired_third_party_cots": acquired_third_party_cots,
-                    "support_contract_sla": support_contract_sla,
-                    "bcbs239_output_mapping": bcbs_mapping,
-                    "cde_linkage": cde_linkage,
+                    "legacy_onboarding": 1 if legacy_onboarding == "Yes" else 0,
                     "inputs": inputs,
                     "outputs": outputs,
                     "recipients": recipients,
@@ -1434,6 +1226,7 @@ def page_register() -> None:
                 safe_df(duplicates)
         except ValueError as exc:
             st.error(str(exc))
+
 
 def page_detail() -> None:
     st.title("EUC Detail View")
@@ -1455,50 +1248,41 @@ def page_detail() -> None:
             euc,
             [
                 "purpose",
-                ("Legal Entity", "legal_entity"),
                 "business_unit",
-                "owner",
-                "owner_delegate",
-                "reviewer",
+                ("Legal entity", "legal_entity"),
+                ("Reviewer", "reviewer"),
+                ("Supports Material Report?", "supports_material_report"),
+                ("Supports Material KRI?", "supports_material_kri"),
+                ("Supports Material Model?", "supports_material_model"),
+                ("Legacy onboarding", "legacy_onboarding"),
                 "technology_type",
                 "storage_location",
                 "frequency",
                 ("Execution schedule (working day)", "schedule"),
                 ("Cut-off / delivery working day", "cut_off"),
-                ("Used by two or more BUs", "multi_bu_use"),
-                ("Number of Active Users", "active_user_count"),
-                ("Created by BU", "created_by_bu"),
-                ("Third-party / COTS", "acquired_third_party_cots"),
-                ("Support contract / SLA", "support_contract_sla"),
                 ("SPOF indicator", "spof_indicator"),
-                ("Last Risk Assessment", "last_risk_assessment_date"),
                 "next_review_date",
-                "inherent_risk",
-                "residual_risk",
             ],
             title="EUC summary",
         )
         if svc.can_edit_euc(role, username, euc):
             with st.expander("Edit EUC summary and lifecycle"):
                 with st.form("edit_euc"):
-                    name = st.text_input("EUC Application Name", value=euc.get("name") or "")
-                    legal_entity = reference_selectbox("legal_entity", "Legal Entity", LEGAL_ENTITIES, euc.get("legal_entity"), key=f"edit_legal_entity_{euc['euc_id']}")
-                    owner = user_selectbox("Owner", euc.get("owner"), key=f"edit_owner_{euc['euc_id']}")
-                    delegate = user_selectbox("Owner delegate", euc.get("owner_delegate"), key=f"edit_delegate_{euc['euc_id']}", include_blank=True, role=svc.CONTRIBUTOR_ROLE)
-                    reviewer = user_selectbox("Reviewer", euc.get("reviewer"), key=f"edit_reviewer_{euc['euc_id']}", include_blank=True)
-                    unit = reference_selectbox("business_unit", "Business Unit", BUSINESS_UNITS, euc.get("business_unit"), key=f"edit_business_unit_{euc['euc_id']}")
+                    name = st.text_input("Name", value=euc.get("name") or "")
+                    owner = user_selectbox("Owner", euc.get("owner") or "", key=f"edit_owner_{euc['euc_id']}")
+                    delegate = user_selectbox("Owner delegate", euc.get("owner_delegate") or "", key=f"edit_delegate_{euc['euc_id']}")
+                    unit = st.selectbox("Business unit", BUSINESS_UNITS, index=option_index(BUSINESS_UNITS, euc.get("business_unit")), help="Owning business unit.")
+                    legal_entity = st.selectbox("Legal entity", LEGAL_ENTITIES, index=option_index(LEGAL_ENTITIES, euc.get("legal_entity")), help="Owning legal entity.")
+                    reviewer = user_selectbox("Reviewer", euc.get("reviewer") or "", key=f"edit_reviewer_{euc['euc_id']}")
                     tech = st.selectbox("Technology", TECHNOLOGY_TYPES, index=option_index(TECHNOLOGY_TYPES, euc.get("technology_type")))
                     storage = st.text_input("Storage location", value=euc.get("storage_location") or "")
+                    supports_material_report = yes_no_selectbox("Supports Material Report?", euc.get("supports_material_report"), key=f"edit_supports_report_{euc['euc_id']}")
+                    supports_material_kri = yes_no_selectbox("Supports Material KRI?", euc.get("supports_material_kri"), key=f"edit_supports_kri_{euc['euc_id']}")
+                    supports_material_model = yes_no_selectbox("Supports Material Model?", euc.get("supports_material_model"), key=f"edit_supports_model_{euc['euc_id']}")
+                    legacy_onboarding = st.radio("Legacy onboarding / existing active EUC?", ["No", "Yes"], index=1 if int(euc.get("legacy_onboarding") or 0) else 0, horizontal=True)
                     lifecycle = st.selectbox("Lifecycle status", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, euc.get("lifecycle_status")))
                     overall = st.selectbox("Overall status", OVERALL_STATUSES, index=option_index(OVERALL_STATUSES, euc.get("overall_status")))
-                    next_review = st.date_input("Next Risk Assessment / review date", value=pd.to_datetime(euc.get("next_review_date") or date.today()).date())
-                    u1, u2, u3 = st.columns(3)
-                    multi_bu_use = u1.selectbox("In use by two or more distinct BUs?", ["No", "Yes"], index=option_index(["No", "Yes"], euc.get("multi_bu_use") or "No"), key=f"edit_multi_bu_{euc['euc_id']}")
-                    active_user_count = u2.number_input("Number of Active Users", min_value=0, step=1, value=int(euc.get("active_user_count") or 0), key=f"edit_active_users_{euc['euc_id']}")
-                    created_by_bu = u3.selectbox("Created by the BU?", ["Yes", "No"], index=option_index(["Yes", "No"], euc.get("created_by_bu") or "Yes"), key=f"edit_created_by_bu_{euc['euc_id']}")
-                    s1, s2 = st.columns(2)
-                    acquired_third_party_cots = s1.selectbox("Acquired by third-party / COTS?", ["No", "Yes"], index=option_index(["No", "Yes"], euc.get("acquired_third_party_cots") or "No"), key=f"edit_cots_{euc['euc_id']}")
-                    support_contract_sla = s2.selectbox("Support contract / SLA in place?", ["No", "Yes", "Not Applicable"], index=option_index(["No", "Yes", "Not Applicable"], euc.get("support_contract_sla") or "No"), key=f"edit_sla_{euc['euc_id']}")
+                    next_review = st.date_input("Next review date", value=pd.to_datetime(euc.get("next_review_date") or date.today()).date())
                     c_sched1, c_sched2, c_sched3 = st.columns(3)
                     frequency = c_sched1.selectbox("Frequency", FREQUENCIES, index=option_index(FREQUENCIES, euc.get("frequency")), help="How often the EUC is executed.")
                     with c_sched2:
@@ -1527,29 +1311,7 @@ def page_detail() -> None:
                     )
                     if st.form_submit_button("Save changes"):
                         payload = dict(euc)
-                        payload.update({
-                            "name": name,
-                            "legal_entity": legal_entity,
-                            "owner": owner,
-                            "owner_delegate": delegate,
-                            "reviewer": reviewer,
-                            "business_unit": unit,
-                            "technology_type": tech,
-                            "storage_location": storage,
-                            "lifecycle_status": lifecycle,
-                            "overall_status": overall,
-                            "next_review_date": next_review.isoformat(),
-                            "frequency": frequency,
-                            "schedule": schedule,
-                            "cut_off": cut_off,
-                            "multi_bu_use": multi_bu_use,
-                            "active_user_count": int(active_user_count),
-                            "created_by_bu": created_by_bu,
-                            "acquired_third_party_cots": acquired_third_party_cots,
-                            "support_contract_sla": support_contract_sla,
-                            "description": description,
-                            "purpose": purpose,
-                        })
+                        payload.update({"name": name, "owner": owner, "owner_delegate": delegate, "business_unit": unit, "legal_entity": legal_entity, "reviewer": reviewer, "technology_type": tech, "storage_location": storage, "lifecycle_status": lifecycle, "overall_status": overall, "next_review_date": next_review.isoformat(), "frequency": frequency, "schedule": schedule, "cut_off": cut_off, "supports_material_report": supports_material_report, "supports_material_kri": supports_material_kri, "supports_material_model": supports_material_model, "legacy_onboarding": 1 if legacy_onboarding == "Yes" else 0, "description": description, "purpose": purpose})
                         try:
                             svc.update_euc(euc["euc_id"], payload, username)
                             st.success("EUC updated.")
@@ -1561,11 +1323,10 @@ def page_detail() -> None:
             euc,
             [
                 ("Business / reporting context", "business_context"),
-                ("Supports Material Report", "supports_material_report"),
-                ("Supports Material KRI", "supports_material_kri"),
-                ("Supports Material Model", "supports_material_model"),
                 ("BCBS 239 output mapping", "bcbs239_output_mapping"),
-                ("CDE linkage", "cde_linkage"),
+                ("Supports Material Report?", "supports_material_report"),
+                ("Supports Material KRI?", "supports_material_kri"),
+                ("Supports Material Model?", "supports_material_model"),
                 "inputs",
                 "outputs",
                 "recipients",
@@ -1583,15 +1344,7 @@ def page_detail() -> None:
                         value=euc.get("business_context") or "",
                         help="Explain why this EUC matters in the business or reporting process, including downstream reports, decisions, controls or BCBS 239 relevance.",
                     )
-                    m1, m2, m3 = st.columns(3)
-                    with m1:
-                        payload["supports_material_report"] = bcbs_material_selectbox("Supports Material Report under 241 BCBS 239 Overarching Framework", "Material Report", euc.get("supports_material_report"), key="detail_supports_report")
-                    with m2:
-                        payload["supports_material_kri"] = bcbs_material_selectbox("Supports Material KRI under 241 BCBS 239 Overarching Framework", "Material KRI", euc.get("supports_material_kri"), key="detail_supports_kri")
-                    with m3:
-                        payload["supports_material_model"] = bcbs_material_selectbox("Supports Material Model under 241 BCBS 239 Overarching Framework", "Material Model", euc.get("supports_material_model"), key="detail_supports_model")
-                    payload["bcbs239_output_mapping"] = bcbs_output_selectbox("Primary BCBS 239 output mapping *", euc.get("bcbs239_output_mapping"), key="detail_bcbs239_output")
-                    payload["cde_linkage"] = cde_linkage_multiselect("CDE linkage", euc.get("cde_linkage"), key="detail_cde_linkage")
+                    payload["bcbs239_output_mapping"] = bcbs_output_selectbox("BCBS 239 output mapping *", euc.get("bcbs239_output_mapping"), key="detail_bcbs239_output")
                     for field in ["inputs", "outputs", "recipients", "dependencies", "mapping_na_justification"]:
                         payload[field] = st.text_area(field.replace("_", " ").title(), value=euc.get(field) or "")
                     if st.form_submit_button("Save mapping"):
@@ -1620,154 +1373,167 @@ def page_detail() -> None:
         safe_df(svc.audit_trail({"entity_type": "EUC", "entity_id": euc["euc_id"]}), height=350)
 
 
-def _component_asset_form(prefix: str, euc: dict[str, Any], component: dict[str, Any] | None = None) -> dict[str, Any]:
-    component = component or {}
-    record_table(
-        euc,
-        [
-            ("Parent EUC reference", "reference_id"),
-            ("EUC Application", "name"),
-            ("Business Unit", "business_unit"),
-            ("Owner", "owner"),
-        ],
-        title="Parent EUC context",
-    )
-
-    st.markdown("#### 1. Asset / file identification")
-    c1, c2 = st.columns(2)
-    component_name = c1.text_input("Files / Asset Name *", value=component.get("component_name") or "", key=f"{prefix}_component_name")
-    file_description = c2.text_input("File description", value=component.get("file_description") or component.get("description") or "", key=f"{prefix}_file_description")
-    description = st.text_area("Additional asset description / notes", value=component.get("description") or "", key=f"{prefix}_description")
-
-    st.markdown("#### 2. Mapping and operationalization")
-    c3, c4 = st.columns(2)
-    with c3:
-        rrf_mapping = bcbs_any_mapping_selectbox(
-            "RRF Material Report / KRI / Model Mapping",
-            component.get("rrf_mapping"),
-            key=f"{prefix}_rrf_mapping",
-        )
-    operationalization_document_link = c4.text_input(
-        "Operationalization Document Link",
-        value=component.get("operationalization_document_link") or "",
-        key=f"{prefix}_op_doc_link",
-    )
-
-    st.markdown("#### 3. Technology and controlled storage")
-    c5, c6, c7 = st.columns(3)
-    technology_type = c5.selectbox("Technology Type", TECHNOLOGY_TYPES, index=option_index(TECHNOLOGY_TYPES, component.get("technology_type") or component.get("component_type") or euc.get("technology_type")), key=f"{prefix}_technology_type")
-    component_type = technology_type
-    technology = c6.text_input("Technology details", value=component.get("technology") or technology_type or "", key=f"{prefix}_technology")
-    controlled_storage_type = reference_selectbox("controlled_storage_type", "Controlled Storage Type", CONTROLLED_STORAGE_TYPES, component.get("controlled_storage_type"), key=f"{prefix}_controlled_storage_type")
-    controlled_storage_location = st.text_input("Controlled Storage Location", value=component.get("controlled_storage_location") or component.get("storage_location") or euc.get("storage_location") or "", key=f"{prefix}_controlled_storage_location")
-
-    st.markdown("#### 4. Inputs, outputs and CDEs")
-    input_sources = st.text_area("Input sources", value=component.get("input_sources") or "", key=f"{prefix}_input_sources")
-    cde_mappings = st.text_area("CDE Mappings", value=component.get("cde_mappings") or "", key=f"{prefix}_cde_mappings")
-    data_outputs = st.text_area("Data Outputs", value=component.get("data_outputs") or "", key=f"{prefix}_data_outputs")
-
-    st.markdown("#### 5. Schedule, frequency and cut-off")
-    c8, c9, c10 = st.columns(3)
-    with c8:
-        asset_cut_off = working_day_selectbox("Cut-off working day", component.get("asset_cut_off") or euc.get("cut_off"), key=f"{prefix}_asset_cutoff")
-    with c9:
-        processing_schedule = working_day_selectbox("Processing Schedule / Execution Window", component.get("processing_schedule") or euc.get("schedule"), key=f"{prefix}_processing_schedule")
-    execution_frequency = c10.selectbox("Execution Frequency", FREQUENCIES, index=option_index(FREQUENCIES, component.get("execution_frequency") or euc.get("frequency")), key=f"{prefix}_execution_frequency")
-
-    st.markdown("#### 6. Automation, resilience and SPOF")
-    c11, c12, c13 = st.columns(3)
-    level_of_automation = reference_selectbox("level_of_automation", "Level of Automation", LEVELS_OF_AUTOMATION, component.get("level_of_automation"), key=f"{prefix}_automation")
-    backup_recovery_arrangements = c12.text_input("Backup / Recovery Arrangements", value=component.get("backup_recovery_arrangements") or "", key=f"{prefix}_backup")
-    spof_risk = c13.selectbox("Single Point of Failure risk", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("spof_risk") or "No"), key=f"{prefix}_spof")
-
-    st.markdown("#### 7. Ownership, criticality and review")
-    c14, c15, c16, c17 = st.columns(4)
-    owner_value = user_selectbox("Asset owner", component.get("owner") or euc.get("owner"), key=f"{prefix}_owner")
-    criticality = c15.selectbox("Criticality", ["Low", "Medium", "High", "Critical"], index=option_index(["Low", "Medium", "High", "Critical"], component.get("criticality") or "Medium"), key=f"{prefix}_criticality")
-    mod_default = pd.to_datetime(component.get("modification_date"), errors="coerce")
-    review_default = pd.to_datetime(component.get("review_date"), errors="coerce")
-    modification_date = c16.date_input("Modification Date", value=(mod_default.date() if pd.notna(mod_default) else date.today()), key=f"{prefix}_mod_date")
-    review_date = c17.date_input("Review Date", value=(review_default.date() if pd.notna(review_default) else date.today() + timedelta(days=90)), key=f"{prefix}_review_date")
-
-    return {
-        "euc_id": euc["euc_id"],
-        "component_name": component_name.strip(),
-        "component_type": component_type,
-        "technology": technology,
-        "storage_location": controlled_storage_location,
-        "description": description,
-        "criticality": criticality,
-        "owner": owner_value,
-        "rrf_mapping": rrf_mapping,
-        "operationalization_document_link": operationalization_document_link,
-        "file_description": file_description,
-        "technology_type": technology_type,
-        "controlled_storage_type": controlled_storage_type,
-        "controlled_storage_location": controlled_storage_location,
-        "input_sources": input_sources,
-        "asset_cut_off": asset_cut_off,
-        "processing_schedule": processing_schedule,
-        "execution_frequency": execution_frequency,
-        "cde_mappings": cde_mappings,
-        "data_outputs": data_outputs,
-        "level_of_automation": level_of_automation,
-        "backup_recovery_arrangements": backup_recovery_arrangements,
-        "spof_risk": spof_risk,
-        "modification_date": modification_date.isoformat(),
-        "review_date": review_date.isoformat(),
-    }
-
-
 def page_components() -> None:
-    st.title("Components / EUC Asset Inventory")
+    st.title("Components / Assets")
     username, role = current_user()
     euc = euc_selector()
     if not euc:
         return
 
     components = svc.get_components(euc["euc_id"])
-    st.subheader(f"EUC Asset Inventory for {euc['reference_id']} — {euc['name']}")
-    st.caption("Each asset row is linked to the parent EUC through euc_id. Parent Business Unit and EUC Application are shown from the EUC Inventory record and are not typed manually in the child asset form.")
-    safe_df(components, height=380)
+    st.subheader(f"EUC Asset Inventory for {euc['reference_id']}")
+    safe_df(components, height=350)
 
     can_edit = svc.can_edit_euc(role, username, euc) or role == svc.GCC_ROLE
     if not can_edit:
-        st.info("You can view components/assets but cannot add or edit them for this EUC in the current role.")
+        st.info("You can view components but cannot add or edit components for this EUC in the current role.")
         return
 
-    tabs = st.tabs(["Edit selected asset", "Add asset"])
+    tabs = st.tabs(["Edit selected component", "Add component"])
+    cde_options = [""] + CDE_LINKAGE_OPTIONS
     with tabs[0]:
         if components.empty:
-            st.info("No assets exist for this EUC yet.")
+            st.info("No components exist for this EUC yet.")
         else:
             component_map = {
-                f"{row['component_id']} — {row['component_name']} — {row.get('technology_type') or row.get('component_type')}": int(row["component_id"])
+                f"{row['component_id']} — {row['component_name']} — {row['component_type']}": int(row["component_id"])
                 for _, row in components.iterrows()
             }
-            chosen = st.selectbox("Select asset to edit", list(component_map.keys()))
+            chosen = st.selectbox("Select component to edit", list(component_map.keys()))
             component = svc.get_component(component_map[chosen])
             if component:
                 with st.form("edit_component"):
-                    payload = _component_asset_form(f"edit_component_{component['component_id']}", euc, component)
-                    if st.form_submit_button("Save asset changes", type="primary"):
-                        try:
-                            svc.update_component(int(component["component_id"]), payload, username)
-                            st.success("Asset updated.")
+                    st.caption(f"Parent EUC: {euc['reference_id']} — {euc['name']} ({euc['business_unit']})")
+                    c1, c2 = st.columns(2)
+                    component_name = c1.text_input("Component / asset name *", value=component.get("component_name") or "")
+                    component_type = c2.selectbox("Component type *", TECHNOLOGY_TYPES, index=option_index(TECHNOLOGY_TYPES, component.get("component_type")))
+                    technology = c1.text_input("Technology", value=component.get("technology") or "")
+                    storage_location = c2.text_input("Storage location", value=component.get("storage_location") or "")
+                    criticality = c1.selectbox("Criticality", ["Low", "Medium", "High", "Critical"], index=option_index(["Low", "Medium", "High", "Critical"], component.get("criticality")))
+                    owner_value = user_selectbox("Owner", component.get("owner") or username, key=f"component_owner_{component.get('component_id')}")
+                    operationalization_document_link = st.text_input("Operationalization document link", value=component.get("operationalization_document_link") or "")
+                    file_description = st.text_area("File description", value=component.get("file_description") or "")
+                    c3, c4, c5 = st.columns(3)
+                    technology_type = c3.selectbox("Technology type", TECHNOLOGY_TYPES, index=option_index(TECHNOLOGY_TYPES, component.get("technology_type") or component.get("technology")))
+                    controlled_storage_type = c4.selectbox("Controlled storage type", CONTROLLED_STORAGE_TYPES, index=option_index(CONTROLLED_STORAGE_TYPES, component.get("controlled_storage_type")))
+                    controlled_storage_location = c5.text_input("Controlled storage location", value=component.get("controlled_storage_location") or component.get("storage_location") or "")
+                    input_sources = st.text_area("Input sources", value=component.get("input_sources") or "")
+                    c6, c7, c8 = st.columns(3)
+                    cut_off = working_day_selectbox("Cut-off (working day)", component.get("cut_off"), key=f"component_cutoff_{component.get('component_id')}")
+                    processing_schedule = c7.text_input("Processing schedule / execution window", value=component.get("processing_schedule") or "")
+                    execution_frequency = c8.selectbox("Execution frequency", FREQUENCIES, index=option_index(FREQUENCIES, component.get("execution_frequency") or euc.get("frequency")))
+                    existing_cde = [v.strip() for v in str(component.get("cde_mappings") or "").split(";") if v.strip()]
+                    cde_mappings = st.multiselect("CDE mappings", CDE_LINKAGE_OPTIONS, default=[v for v in existing_cde if v in CDE_LINKAGE_OPTIONS])
+                    data_outputs = st.text_area("Data outputs", value=component.get("data_outputs") or "")
+                    level_of_automation = st.selectbox("Level of automation", LEVELS_OF_AUTOMATION, index=option_index(LEVELS_OF_AUTOMATION, component.get("level_of_automation")))
+                    backup_recovery_arrangements = st.text_area("Backup / recovery arrangements", value=component.get("backup_recovery_arrangements") or "")
+                    spof_risk = yes_no_selectbox("Single point of failure risk?", component.get("spof_risk") or "No", key=f"component_spof_{component.get('component_id')}")
+                    c9, c10 = st.columns(2)
+                    modification_date = c9.date_input("Modification date", value=pd.to_datetime(component.get("modification_date") or date.today()).date())
+                    review_date = c10.date_input("Review date", value=pd.to_datetime(component.get("review_date") or date.today()).date())
+                    description = st.text_area("Description", value=component.get("description") or "")
+                    if st.form_submit_button("Save component changes", type="primary"):
+                        if not component_name.strip():
+                            st.error("Component name is required.")
+                        else:
+                            svc.update_component(
+                                int(component["component_id"]),
+                                {
+                                    "component_name": component_name.strip(),
+                                    "component_type": component_type,
+                                    "technology": technology,
+                                    "storage_location": storage_location,
+                                    "criticality": criticality,
+                                    "owner": owner_value,
+                                    "operationalization_document_link": operationalization_document_link,
+                                    "file_description": file_description,
+                                    "technology_type": technology_type,
+                                    "controlled_storage_type": controlled_storage_type,
+                                    "controlled_storage_location": controlled_storage_location,
+                                    "input_sources": input_sources,
+                                    "cut_off": cut_off,
+                                    "processing_schedule": processing_schedule,
+                                    "execution_frequency": execution_frequency,
+                                    "cde_mappings": "; ".join(cde_mappings),
+                                    "data_outputs": data_outputs,
+                                    "level_of_automation": level_of_automation,
+                                    "backup_recovery_arrangements": backup_recovery_arrangements,
+                                    "spof_risk": spof_risk,
+                                    "modification_date": modification_date.isoformat(),
+                                    "review_date": review_date.isoformat(),
+                                    "description": description,
+                                },
+                                username,
+                            )
+                            st.success("Component updated.")
                             rerun()
-                        except ValueError as exc:
-                            st.error(str(exc))
 
     with tabs[1]:
         with st.form("add_component"):
-            st.subheader("Add asset")
-            payload = _component_asset_form(f"add_component_{euc['euc_id']}", euc, None)
-            if st.form_submit_button("Add asset", type="primary"):
-                try:
-                    svc.create_component(payload, username)
-                    st.success("Asset added.")
+            st.subheader("Add component")
+            st.caption(f"Parent EUC: {euc['reference_id']} — {euc['name']} ({euc['business_unit']})")
+            c1, c2 = st.columns(2)
+            component_name = c1.text_input("Component name *")
+            component_type = c2.selectbox("Component type *", TECHNOLOGY_TYPES)
+            technology = c1.text_input("Technology", value=euc.get("technology_type") or "")
+            storage_location = c2.text_input("Storage location", value=euc.get("storage_location") or "")
+            criticality = c1.selectbox("Criticality", ["Low", "Medium", "High", "Critical"])
+            owner = user_selectbox("Owner", euc.get("owner") or username, key=f"component_add_owner_{euc['euc_id']}")
+            operationalization_document_link = st.text_input("Operationalization document link")
+            file_description = st.text_area("File description")
+            c3, c4, c5 = st.columns(3)
+            technology_type = c3.selectbox("Technology type", TECHNOLOGY_TYPES)
+            controlled_storage_type = c4.selectbox("Controlled storage type", CONTROLLED_STORAGE_TYPES)
+            controlled_storage_location = c5.text_input("Controlled storage location", value=euc.get("storage_location") or "")
+            input_sources = st.text_area("Input sources")
+            cut_off = working_day_selectbox("Cut-off (working day)", None, key=f"component_add_cutoff_{euc['euc_id']}")
+            processing_schedule = st.text_input("Processing schedule / execution window")
+            execution_frequency = st.selectbox("Execution frequency", FREQUENCIES, index=option_index(FREQUENCIES, euc.get("frequency")))
+            cde_mappings = st.multiselect("CDE mappings", CDE_LINKAGE_OPTIONS)
+            data_outputs = st.text_area("Data outputs")
+            level_of_automation = st.selectbox("Level of automation", LEVELS_OF_AUTOMATION)
+            backup_recovery_arrangements = st.text_area("Backup / recovery arrangements")
+            spof_risk = yes_no_selectbox("Single point of failure risk?", "No", key=f"component_add_spof_{euc['euc_id']}")
+            c9, c10 = st.columns(2)
+            modification_date = c9.date_input("Modification date", value=date.today())
+            review_date = c10.date_input("Review date", value=date.today())
+            description = st.text_area("Description")
+            if st.form_submit_button("Add component"):
+                if not component_name.strip():
+                    st.error("Component name is required.")
+                else:
+                    svc.create_component(
+                        {
+                            "euc_id": euc["euc_id"],
+                            "component_name": component_name.strip(),
+                            "component_type": component_type,
+                            "technology": technology,
+                            "storage_location": storage_location,
+                            "criticality": criticality,
+                            "owner": owner,
+                            "operationalization_document_link": operationalization_document_link,
+                            "file_description": file_description,
+                            "technology_type": technology_type,
+                            "controlled_storage_type": controlled_storage_type,
+                            "controlled_storage_location": controlled_storage_location,
+                            "input_sources": input_sources,
+                            "cut_off": cut_off,
+                            "processing_schedule": processing_schedule,
+                            "execution_frequency": execution_frequency,
+                            "cde_mappings": "; ".join(cde_mappings),
+                            "data_outputs": data_outputs,
+                            "level_of_automation": level_of_automation,
+                            "backup_recovery_arrangements": backup_recovery_arrangements,
+                            "spof_risk": spof_risk,
+                            "modification_date": modification_date.isoformat(),
+                            "review_date": review_date.isoformat(),
+                            "description": description,
+                        },
+                        username,
+                    )
+                    st.success("Component added.")
                     rerun()
-                except ValueError as exc:
-                    st.error(str(exc))
+
 
 def page_risk_assessment() -> None:
     st.title("Risk Assessment")
@@ -1910,7 +1676,7 @@ def page_documents() -> None:
     # Synchronize documentation completeness/lifecycle before showing the checklist.
     svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
     checklist = svc.artifact_checklist(euc["euc_id"])
-    st.caption("Use `what_user_should_do` for action guidance and `what_to_upload` for evidence content expectations. Filter directly inside the table using the column filter boxes.")
+    st.caption("Use the what_to_upload column to understand exactly what evidence is expected for each requirement. Filter directly inside the table using the column filter boxes.")
     safe_df(checklist, height=300, key=f"documents_required_artifacts_{euc['euc_id']}")
 
     st.subheader("Completed risk assessments used as internal evidence")
@@ -2083,7 +1849,7 @@ def page_checklist() -> None:
     )
     st.caption("Checklist baseline follows Overall Inherent Risk / BCBS 239 materiality. Residual risk is used for remediation, escalation and exception handling.")
     checklist = svc.artifact_checklist(euc["euc_id"])
-    st.caption("Use `what_user_should_do` for action guidance and `what_to_upload` for evidence content expectations. Filter directly inside the table using the column filter boxes.")
+    st.caption("Filter directly inside the table using the column filter boxes.")
     safe_df(checklist, height=350, key=f"standalone_required_artifacts_{euc['euc_id']}")
     c1, c2 = st.columns(2)
     if c1.button("Recalculate completeness"):
@@ -2126,12 +1892,8 @@ def page_tasks() -> None:
     if chosen_euc != "All my accessible tasks":
         tasks = tasks[tasks["euc_id"] == euc_lookup[chosen_euc]]
 
-    if not tasks.empty:
-        tasks = tasks.copy()
-        tasks["what_user_should_do"] = tasks.apply(task_user_action_guidance_safe, axis=1)
-
     display_cols = [
-        "task_id", "reference_id", "euc_name", "task_type", "title", "what_user_should_do", "assigned_to",
+        "task_id", "reference_id", "euc_name", "task_type", "title", "assigned_to",
         "assigned_full_name", "assigned_email", "assigned_role", "due_date", "priority", "status", "overdue"
     ]
     safe_df(tasks[[c for c in display_cols if c in tasks.columns]], height=420)
@@ -2143,7 +1905,6 @@ def page_tasks() -> None:
     task_map = {f"{row['task_id']} — {row['title']}": int(row["task_id"]) for _, row in tasks.iterrows()}
     chosen = st.selectbox("Task", list(task_map.keys()))
     selected_task = tasks[tasks["task_id"] == task_map[chosen]].iloc[0].to_dict()
-    st.info(f"What the user should do: {task_user_action_guidance_safe(selected_task)}")
     with st.form("update_task"):
         c1, c2, c3 = st.columns(3)
         status = c1.selectbox("Status", TASK_STATUSES, index=option_index(TASK_STATUSES, selected_task.get("status")))
@@ -2547,20 +2308,7 @@ def page_admin() -> None:
     refs = svc.load_reference_data()
     tabs = st.tabs(["Reference data", "User directory", "Required artifact rules", "Due-date rules", "BCBS 239 outputs", "Seed/reset demo"])
     with tabs[0]:
-        category = st.selectbox(
-            "Category",
-            [
-                "document_type",
-                "lifecycle_status",
-                "risk_level",
-                "control_area",
-                "cacrt_dimension",
-                "legal_entity",
-                "business_unit",
-                "controlled_storage_type",
-                "level_of_automation",
-            ],
-        )
+        category = st.selectbox("Category", ["document_type", "lifecycle_status", "risk_level", "control_area", "cacrt_dimension"])
         st.write("Current values")
         values_df = pd.DataFrame({"Value": refs.get(category, [])})
         safe_df(values_df)
@@ -2675,7 +2423,7 @@ def page_admin() -> None:
             with st.form("edit_bcbs_output"):
                 c1, c2 = st.columns(2)
                 out_name = c1.text_input("Output / report name *", value=selected_output.get("output_name") or "")
-                out_type = c2.selectbox("Output type", BCBS239_OUTPUT_TYPES, index=option_index(BCBS239_OUTPUT_TYPES, selected_output.get("output_type") or "Material Report"))
+                out_type = c2.text_input("Output type", value=selected_output.get("output_type") or "Material Report")
                 out_owner = c1.text_input("Owner", value=selected_output.get("owner") or "")
                 out_active = c2.checkbox("Active", value=bool(selected_output.get("active_flag")))
                 out_comments = st.text_area("Maker-checker comments", value=selected_output.get("maker_checker_comments") or "")
@@ -2683,7 +2431,7 @@ def page_admin() -> None:
                     svc.upsert_bcbs239_output(
                         {
                             "output_name": out_name.strip(),
-                            "output_type": out_type or "Material Report",
+                            "output_type": out_type.strip() or "Material Report",
                             "owner": out_owner.strip(),
                             "active_flag": out_active,
                             "maker_checker_comments": out_comments,
@@ -2696,7 +2444,7 @@ def page_admin() -> None:
             with st.form("add_bcbs_output"):
                 c1, c2 = st.columns(2)
                 new_out_name = c1.text_input("New output / report name *")
-                new_out_type = c2.selectbox("New output type", BCBS239_OUTPUT_TYPES, index=0)
+                new_out_type = c2.text_input("New output type", value="Material Report")
                 new_out_owner = c1.text_input("New owner")
                 new_out_active = c2.checkbox("New output active", value=True)
                 new_out_comments = st.text_area("New output comments")
@@ -2707,7 +2455,7 @@ def page_admin() -> None:
                         svc.upsert_bcbs239_output(
                             {
                                 "output_name": new_out_name.strip(),
-                                "output_type": new_out_type or "Material Report",
+                                "output_type": new_out_type.strip() or "Material Report",
                                 "owner": new_out_owner.strip(),
                                 "active_flag": new_out_active,
                                 "maker_checker_comments": new_out_comments,

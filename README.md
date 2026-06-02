@@ -258,20 +258,12 @@ All user-facing tabular views now use `streamlit-aggrid` where available. Each t
 - **Purpose** explains what the EUC is used for and what it produces or supports.
 - **Business / reporting context** explains why the EUC matters in the wider business, reporting, control, or BCBS 239 process.
 
-## Patch 41 notes
+## Latest policy-driven updates
 
-- Merged the confirmed EUC Inventory and EUC Asset Inventory workbook alignment into the latest app baseline.
-- EUC Inventory now includes the additional parent/application fields from the workbook: legal entity, reviewer, material report/KRI/model mappings, multi-BU use, active user count, BU-created flag, third-party/COTS flag, support contract/SLA flag, and last risk assessment date.
-- Legal Entity and Business Unit are controlled dropdowns maintained from Admin Configuration reference data.
-- Owner, Owner Delegate and Reviewer are selected from the editable User Directory.
-- Supports Material Report, Supports Material KRI and Supports Material Model are controlled dropdowns filtered from BCBS 239 outputs by output type: Material Report, Material KRI or Material Model.
-- Last Risk Assessment date and overall inherent/residual risk are updated by the Risk Assessment module and are not manually maintained.
-- Components / Assets has been expanded into the full EUC Asset Inventory child form linked to the parent EUC by `euc_id`. Parent Business Unit, Application and Reference ID are shown as read-only context.
-- Asset fields now cover RRF Report/KRI/Model mapping, operationalization link, asset/file name, file description, technology, controlled storage type/location, inputs, cut-off, processing schedule, execution frequency, CDE mappings, outputs, automation level, backup/recovery, SPOF risk, modification date and review date.
-- Existing confirmed behavior is preserved: Option B role-based menu, AgGrid no-rerun filters and readability, risk assessment workflow, evidence upload reset, multi-file/multi-type evidence upload, user directory, RACI notifications, reports, no automatic operational-data reseeding, and Group IT/admin content restrictions.
-
-## Patch 43 notes
-
-- Fixed an AgGrid startup/runtime error in EUC Detail View and other joined tables when a dataframe contains duplicate column names.
-- The grid helper now deduplicates display column names before rendering and tolerates Pandas returning a DataFrame instead of a Series during column-width estimation.
-- No business logic, permissions, risk assessment logic, evidence handling, RACI notifications, or inventory field mappings were changed in this patch.
+- The EUC Inventory now follows a two-layer model: EUC Application layer plus EUC Asset layer.
+- `Legal Entity`, `Business Unit`, `Owner` and `Reviewer` are controlled dropdowns; `Owner` and `Reviewer` come from the User Directory.
+- `Supports Material Report`, `Supports Material KRI` and `Supports Material Model` are Yes/No fields.
+- `CDE linkage` has been removed from the EUC parent layer UI and is maintained only in the EUC Asset Inventory.
+- The app now treats legacy onboarding separately from new EUC onboarding; historical Testing / UAT / Approval evidence is not required for legacy onboarding unless triggered by change, incident, exception or heightened residual risk.
+- The evidence baseline is driven by Overall Inherent Risk, while Residual Risk drives remediation / escalation / exception handling.
+- The app now keeps review-related evidence as a single `Review Evidence` type and uses combined `Change & Versioning Evidence` and `Incident & RCA Evidence` types.

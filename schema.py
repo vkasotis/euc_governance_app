@@ -162,73 +162,6 @@ TECHNOLOGY_TYPES = [
 
 FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Ad hoc", "Event-driven"]
 
-LEGAL_ENTITIES = [
-    "Eurobank S.A.",
-    "Eurobank Holdings",
-    "Eurobank Cyprus",
-    "Eurobank Bulgaria",
-    "Eurobank Private Bank Luxembourg",
-    "Other",
-]
-
-BUSINESS_UNITS = [
-    "Risk Management",
-    "Finance",
-    "Treasury",
-    "Retail Banking",
-    "Corporate Banking",
-    "Operations",
-    "Data Governance",
-    "Group IT",
-    "Internal Audit",
-    "Other",
-]
-
-CONTROLLED_STORAGE_TYPES = [
-    "Controlled network folder",
-    "SharePoint / Teams controlled site",
-    "Git / controlled repository",
-    "Database / data warehouse",
-    "Approved EUC platform",
-    "Other controlled storage",
-]
-
-LEVELS_OF_AUTOMATION = [
-    "Manual",
-    "Semi-automated",
-    "Automated with manual trigger",
-    "Scheduled / automated",
-    "Other",
-]
-
-BCBS239_OUTPUT_TYPES = ["Material Report", "Material KRI", "Material Model"]
-
-# MVP configurable CDE list used by the EUC Inventory CDE linkage multi-select.
-# The values are seeded into reference_data and can be extended by administrators.
-CDE_LINKAGE_OPTIONS = [
-    "Customer ID",
-    "Counterparty ID",
-    "Account Number",
-    "Facility ID",
-    "Product Code",
-    "Exposure Amount",
-    "Outstanding Balance",
-    "Collateral Value",
-    "Currency",
-    "Maturity Date",
-    "Interest Rate",
-    "Risk Weight",
-    "Probability of Default",
-    "Loss Given Default",
-    "IFRS 9 Stage",
-    "Impairment Allowance",
-    "NPE Flag",
-    "Forbearance Flag",
-    "Liquidity Metric",
-    "Capital Metric",
-    "Other CDE",
-]
-
 DOCUMENT_TYPES = [
     "Risk Assessment",
     "Operating Procedure",
@@ -310,10 +243,6 @@ REFERENCE_CATEGORIES = [
     "control_area",
     "cacrt_dimension",
     "due_date_rule",
-    "legal_entity",
-    "business_unit",
-    "controlled_storage_type",
-    "level_of_automation",
 ]
 
 DEFAULT_REQUIRED_ARTIFACTS = {
@@ -568,10 +497,8 @@ CREATE_TABLES_SQL = [
         name TEXT NOT NULL,
         description TEXT,
         purpose TEXT,
-        legal_entity TEXT,
         owner TEXT NOT NULL,
         owner_delegate TEXT,
-        reviewer TEXT,
         business_unit TEXT NOT NULL,
         technology_type TEXT NOT NULL,
         storage_location TEXT NOT NULL,
@@ -579,16 +506,14 @@ CREATE_TABLES_SQL = [
         schedule TEXT,
         cut_off TEXT,
         business_context TEXT,
-        supports_material_report TEXT,
-        supports_material_kri TEXT,
-        supports_material_model TEXT,
-        multi_bu_use TEXT,
-        active_user_count INTEGER,
-        created_by_bu TEXT,
-        acquired_third_party_cots TEXT,
-        support_contract_sla TEXT,
-        last_risk_assessment_date TEXT,
         bcbs239_output_mapping TEXT NOT NULL,
+        supports_material_report TEXT DEFAULT 'No',
+        supports_material_kri TEXT DEFAULT 'No',
+        supports_material_model TEXT DEFAULT 'No',
+        reviewer TEXT,
+        legal_entity TEXT,
+        legacy_onboarding INTEGER DEFAULT 0,
+        last_risk_assessment_date TEXT,
         cde_linkage TEXT,
         inputs TEXT,
         outputs TEXT,
@@ -620,14 +545,13 @@ CREATE_TABLES_SQL = [
         description TEXT,
         criticality TEXT,
         owner TEXT,
-        rrf_mapping TEXT,
         operationalization_document_link TEXT,
         file_description TEXT,
         technology_type TEXT,
         controlled_storage_type TEXT,
         controlled_storage_location TEXT,
         input_sources TEXT,
-        asset_cut_off TEXT,
+        cut_off TEXT,
         processing_schedule TEXT,
         execution_frequency TEXT,
         cde_mappings TEXT,
