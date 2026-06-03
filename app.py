@@ -947,6 +947,56 @@ def record_table(record: dict[str, Any], fields: list[str | tuple[str, str]], *,
     detail_df(pd.DataFrame(rows), height="auto")
 
 
+
+
+def _is_yes(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"yes", "y", "true", "1"}
+
+
+def _materially_supports_bcbs(euc: dict[str, Any]) -> bool:
+    return any(
+        _is_yes(euc.get(col))
+        for col in ("supports_material_report", "supports_material_kri", "supports_material_model", "bcbs239_elevated_inherent_override")
+    )
+
+
+def derived_inventory_governance_status(euc: dict[str, Any]) -> dict[str, Any]:
+    """Return derived governance/completeness indicators for the EUC Detail page.
+
+    These are deliberately kept out of initial registration because owners often
+    cannot know them before risk assessment, evidence upload, review and legacy
+    gap assessment have taken place.
+    """
+    euc_id = int(euc["euc_id"])
+    latest = svc.latest_risk_assessment(euc_id)
+    checklist = svc.artifact_checklist(euc_id)
+    gaps = svc.get_documentation_gaps(euc_id, open_only=True)
+    mandatory = checklist[checklist.get("mandatory", True).astype(bool)] if not checklist.empty and "mandatory" in checklist.columns else checklist
+    all_mandatory_accepted = (not mandatory.empty) and mandatory["status"].isin(["Accepted"]).all()
+    risk_accepted = bool(latest and str(latest.get("status") or "") == "Accepted")
+    material = _materially_supports_bcbs(euc)
+    high_or_vh = str(euc.get("inherent_risk") or "") in {"High", "Very High"}
+    four_eye_required = material and high_or_vh
+    high_crit_required = svc.high_criticality_required(euc)
+    baseline_controls_complete = "Yes" if risk_accepted and all_mandatory_accepted else "No"
+    return {
+        "Registration date": euc.get("registration_date"),
+        "Go-live / BAU use date": euc.get("go_live_date"),
+        "Registration complete": "Yes" if all(str(euc.get(f) or "").strip() for f in ["name", "owner", "business_unit", "technology_type", "storage_location", "bcbs239_output_mapping"]) else "No",
+        "Latest risk assessment status": (latest or {}).get("status") or "Missing",
+        "Evidence pack completeness": euc.get("documentation_completeness_status") or "Not Checked",
+        "Mandatory artifacts all accepted": "Yes" if all_mandatory_accepted else "No",
+        "Open documentation gaps": len(gaps) if gaps is not None and not gaps.empty else 0,
+        "Four-eye review required": "Yes" if four_eye_required else "No",
+        "High-criticality Evidence Pack required": "Yes" if high_crit_required else "No",
+        "Baseline controls complete": baseline_controls_complete,
+        "Material mapping confidence": euc.get("material_mapping_confidence") or "Not Assessed",
+        "Documentation gap assessment required": euc.get("documentation_gap_assessment_required") or ("Yes" if str(euc.get("onboarding_type") or "") == "Legacy EUC" else "No"),
+        "Migration status": euc.get("migration_status") or "Not assessed",
+        "Legacy sensitive-data flag": euc.get("legacy_sensitive_data_flag") or "",
+        "Legacy criticality": euc.get("legacy_criticality") or "",
+    }
+
 def assessment_review_card(assessment: dict[str, Any]) -> None:
     """Render a completed risk assessment in workbook-style business sections."""
     st.markdown(
@@ -1402,18 +1452,10 @@ def page_register() -> None:
         registration_date = cdate1.date_input("Registration date", value=date.today())
         go_live_date = cdate2.date_input("Go-live / BAU use date", value=date.today())
         next_review_date = cdate3.date_input("Next Risk Assessment / review date", value=date.today() + timedelta(days=90))
-        st.subheader("Inventory completeness, evidence and migration summary")
-        ic1, ic2, ic3 = st.columns(3)
-        four_eye_review_required = ic1.selectbox("Four-eye review required?", ["No", "Yes"], index=0)
-        high_criticality_evidence_pack_required = ic2.selectbox("High-criticality Evidence Pack required?", ["No", "Yes"], index=1 if any(v == "Yes" for v in [supports_material_report, supports_material_kri, supports_material_model]) else 0)
-        material_mapping_confidence = ic3.selectbox("Material mapping confidence", ["Not Assessed", "Low", "Medium", "High"], index=0)
-        ev1, ev2 = st.columns(2)
-        evidence_pack_location = ev1.text_input("Evidence Pack location / index link")
-        library_controls_link = ev2.text_input("Library of Controls attachment/link")
-        gap_required = st.selectbox("Documentation gap assessment required?", ["No", "Yes"], index=1 if onboarding_type == "Legacy EUC" else 0)
-        documentation_gaps_summary = st.text_area("Documentation gaps summary")
-        migration_status = st.selectbox("Migration status", MIGRATION_STATUSES, index=0)
-        migration_notes = st.text_area("Migration notes")
+        st.caption(
+            "Evidence-pack links, documentation-gap summaries and migration/completeness fields are maintained after registration "
+            "in EUC Detail, Documents & Evidence Pack, Required Artifact Checklist, and GCC/Admin monitoring."
+        )
         submitted = st.form_submit_button("Register EUC")
 
     if submitted:
@@ -1465,15 +1507,11 @@ def page_register() -> None:
                     "material_report_mapping": supports_material_report,
                     "material_kri_mapping": supports_material_kri,
                     "material_model_mapping": supports_material_model,
-                    "evidence_pack_location": evidence_pack_location,
-                    "library_controls_link": library_controls_link,
-                    "four_eye_review_required": four_eye_review_required,
-                    "high_criticality_evidence_pack_required": high_criticality_evidence_pack_required,
-                    "documentation_gap_assessment_required": gap_required,
-                    "documentation_gaps_summary": documentation_gaps_summary,
-                    "material_mapping_confidence": material_mapping_confidence,
-                    "migration_status": migration_status,
-                    "migration_notes": migration_notes,
+                    # Post-registration governance fields are no longer requested in the initial owner form.
+                    # They are initialized here and maintained in the downstream governance pages.
+                    "documentation_gap_assessment_required": "Yes" if onboarding_type == "Legacy EUC" else "No",
+                    "material_mapping_confidence": "Not Assessed",
+                    "migration_status": "Not assessed",
                     "mapping_na_justification": mapping_na_justification,
                 },
                 username,
@@ -1532,6 +1570,41 @@ def page_detail() -> None:
             ],
             title="EUC summary",
         )
+
+        st.markdown("#### Inventory completeness & governance status")
+        st.caption("Derived and post-registration governance fields are shown here instead of being requested during initial EUC registration.")
+        governance_status = derived_inventory_governance_status(euc)
+        detail_df(pd.DataFrame([{"Field": k, "Value": display_value(v)} for k, v in governance_status.items()]), height="auto")
+
+        if svc.can_edit_euc(role, username, euc) or role in {svc.GCC_ROLE, svc.DVU_ROLE}:
+            with st.expander("Edit post-registration governance fields"):
+                with st.form(f"edit_governance_fields_{euc['euc_id']}"):
+                    g1, g2, g3 = st.columns(3)
+                    reg_date_val = pd.to_datetime(euc.get("registration_date") or date.today()).date()
+                    go_live_val = pd.to_datetime(euc.get("go_live_date") or date.today()).date()
+                    registration_date_edit = g1.date_input("Registration date", value=reg_date_val, key=f"gov_reg_date_{euc['euc_id']}")
+                    go_live_date_edit = g2.date_input("Go-live / BAU use date", value=go_live_val, key=f"gov_go_live_{euc['euc_id']}")
+                    material_mapping_confidence = g3.selectbox(
+                        "Material mapping confidence",
+                        ["Not Assessed", "Low", "Medium", "High"],
+                        index=option_index(["Not Assessed", "Low", "Medium", "High"], euc.get("material_mapping_confidence") or "Not Assessed"),
+                        key=f"gov_mapping_conf_{euc['euc_id']}",
+                    )
+                    l1, l2 = st.columns(2)
+                    legacy_sensitive_data_flag = l1.selectbox("Legacy sensitive-data flag", ["", "No", "Yes", "Unknown"], index=option_index(["", "No", "Yes", "Unknown"], euc.get("legacy_sensitive_data_flag") or ""), key=f"legacy_sensitive_{euc['euc_id']}")
+                    legacy_criticality = l2.selectbox("Legacy criticality", ["", "Low", "Medium", "High", "Very High", "Unknown"], index=option_index(["", "Low", "Medium", "High", "Very High", "Unknown"], euc.get("legacy_criticality") or ""), key=f"legacy_crit_{euc['euc_id']}")
+                    if st.form_submit_button("Save governance fields"):
+                        payload = dict(euc)
+                        payload.update({
+                            "registration_date": registration_date_edit.isoformat(),
+                            "go_live_date": go_live_date_edit.isoformat(),
+                            "material_mapping_confidence": material_mapping_confidence,
+                            "legacy_sensitive_data_flag": legacy_sensitive_data_flag,
+                            "legacy_criticality": legacy_criticality,
+                        })
+                        svc.update_euc(euc["euc_id"], payload, username)
+                        st.success("Post-registration governance fields updated.")
+                        rerun()
         if svc.can_edit_euc(role, username, euc):
             with st.expander("Edit EUC summary and lifecycle"):
                 with st.form("edit_euc"):
@@ -2030,6 +2103,36 @@ def page_documents() -> None:
     if not euc:
         return
 
+    st.subheader("Evidence pack index and attachment references")
+    st.caption("These post-registration links are maintained here because they depend on evidence upload, risk assessment completion and reviewer activity.")
+    record_table(
+        euc,
+        [
+            ("Evidence Pack location / index link", "evidence_pack_location"),
+            ("Library of Controls attachment/link", "library_controls_link"),
+            ("Risk Assessment link / reference", "risk_assessment_link"),
+            ("EUC operating process / operationalization link", "euc_operationalization_document_link"),
+            ("Policy 242 RRF / material report operationalization link", "policy242_operationalization_link"),
+        ],
+        title=None,
+    )
+    if svc.can_upload_evidence(role, username, euc) and require_write_access():
+        with st.expander("Update evidence pack and attachment references"):
+            with st.form(f"update_evidence_pack_refs_{euc['euc_id']}"):
+                evidence_pack_location = st.text_input("Evidence Pack location / index link", value=euc.get("evidence_pack_location") or "")
+                library_controls_link = st.text_input("Library of Controls attachment/link", value=euc.get("library_controls_link") or "", help="Library of Controls remains an uploaded attachment/evidence record, not a structured controls module.")
+                risk_assessment_link = st.text_input("Risk Assessment link / reference", value=euc.get("risk_assessment_link") or "", help="Normally this is satisfied by the internal Risk Assessment module; use this only for external references if needed.")
+                if st.form_submit_button("Save evidence references"):
+                    payload = dict(euc)
+                    payload.update({
+                        "evidence_pack_location": evidence_pack_location,
+                        "library_controls_link": library_controls_link,
+                        "risk_assessment_link": risk_assessment_link,
+                    })
+                    svc.update_euc(euc["euc_id"], payload, username)
+                    st.success("Evidence pack references updated.")
+                    rerun()
+
     st.subheader("Required artifact checklist")
     baseline = svc.inherent_baseline_for_euc(euc["euc_id"])
     st.caption(
@@ -2203,6 +2306,33 @@ def page_checklist() -> None:
     # "Awaiting Documentation" after all mandatory artifacts have been accepted.
     svc.evaluate_and_update_completeness(euc["euc_id"], username, create_missing_tasks=False)
     euc = svc.get_euc(euc["euc_id"]) or euc
+
+    st.subheader("Documentation gap assessment summary")
+    record_table(
+        euc,
+        [
+            ("Documentation gap assessment required", "documentation_gap_assessment_required"),
+            ("Documentation gaps summary", "documentation_gaps_summary"),
+        ],
+        title=None,
+    )
+    if not svc.is_read_only(role) and (svc.can_edit_euc(role, username, euc) or role in {svc.GCC_ROLE, svc.DVU_ROLE}):
+        with st.expander("Update documentation gap assessment summary"):
+            with st.form(f"update_gap_summary_{euc['euc_id']}"):
+                required = st.selectbox(
+                    "Documentation gap assessment required?",
+                    ["No", "Yes"],
+                    index=option_index(["No", "Yes"], euc.get("documentation_gap_assessment_required") or ("Yes" if euc.get("onboarding_type") == "Legacy EUC" else "No")),
+                    key=f"gap_required_{euc['euc_id']}",
+                )
+                summary = st.text_area("Documentation gaps summary", value=euc.get("documentation_gaps_summary") or "")
+                if st.form_submit_button("Save gap assessment summary"):
+                    payload = dict(euc)
+                    payload.update({"documentation_gap_assessment_required": required, "documentation_gaps_summary": summary})
+                    svc.update_euc(euc["euc_id"], payload, username)
+                    st.success("Documentation gap assessment summary updated.")
+                    rerun()
+
     baseline = svc.inherent_baseline_for_euc(euc["euc_id"])
     st.markdown(
         f"Inherent baseline: **{badge(baseline['baseline_risk'])}** · "
@@ -2412,8 +2542,8 @@ def page_gcc() -> None:
     data = svc.gcc_monitoring_dataset()
     if not data["risk_distribution"].empty:
         st.plotly_chart(px.bar(data["risk_distribution"], x="residual_risk", y="count", title="Portfolio risk distribution"), use_container_width=True)
-    tabs = st.tabs(["Missing documentation", "Overdue tasks", "Open findings", "Open exceptions", "Open incidents", "High / Very High", "SPOF", "Industrialization", "Decommissioning", "Documentation gaps", "High-criticality reviews", "Industrialization scoring"])
-    for tab, key in zip(tabs, ["missing_documentation", "overdue_tasks", "open_findings", "open_exceptions", "open_incidents", "high_risk", "spof", "industrialization", "decommissioning", "documentation_gaps", "high_criticality_reviews", "industrialization_assessments"]):
+    tabs = st.tabs(["Missing documentation", "Overdue tasks", "Open findings", "Open exceptions", "Open incidents", "High / Very High", "SPOF", "Industrialization", "Decommissioning", "Documentation gaps", "High-criticality reviews", "Industrialization scoring", "Inventory completeness / migration"])
+    for tab, key in zip(tabs, ["missing_documentation", "overdue_tasks", "open_findings", "open_exceptions", "open_incidents", "high_risk", "spof", "industrialization", "decommissioning", "documentation_gaps", "high_criticality_reviews", "industrialization_assessments", "inventory_completeness_migration"]):
         with tab:
             safe_df(data[key], height=350)
 
@@ -2883,7 +3013,7 @@ def page_admin() -> None:
         st.warning("Admin Configuration is restricted to Group IT Governance Administrator.")
         return
     refs = svc.load_reference_data()
-    tabs = st.tabs(["Reference data", "User directory", "Required artifact rules", "Due-date rules", "BCBS 239 outputs", "Seed/reset demo"])
+    tabs = st.tabs(["Reference data", "User directory", "Required artifact rules", "Due-date rules", "BCBS 239 outputs", "Inventory completeness / migration", "Seed/reset demo"])
     with tabs[0]:
         category = st.selectbox(
             "Category",
@@ -3056,6 +3186,41 @@ def page_admin() -> None:
                         rerun()
 
     with tabs[5]:
+        st.subheader("Inventory completeness / migration monitoring")
+        st.caption("This is a Group IT Governance/Admin monitoring view for post-registration migration and inventory completeness metadata. EUC Owners do not complete these fields during initial registration.")
+        inventory_df = svc.inventory_completeness_migration_dataset()
+        safe_df(inventory_df, height=420)
+        csv_download(inventory_df, "inventory_completeness_migration.csv")
+        if not inventory_df.empty:
+            labels = {f"{row['reference_id']} — {row['name']}": int(row["euc_id"]) for _, row in inventory_df.iterrows()}
+            selected_label = st.selectbox("Select EUC to update migration/completeness metadata", list(labels.keys()), key="admin_inventory_migration_select")
+            selected_euc = svc.get_euc(labels[selected_label])
+            if selected_euc:
+                with st.form("admin_update_inventory_migration"):
+                    c1, c2, c3 = st.columns(3)
+                    migration_status = c1.selectbox("Migration status", MIGRATION_STATUSES, index=option_index(MIGRATION_STATUSES, selected_euc.get("migration_status") or "Not assessed"))
+                    material_mapping_confidence = c2.selectbox("Material mapping confidence", ["Not Assessed", "Low", "Medium", "High"], index=option_index(["Not Assessed", "Low", "Medium", "High"], selected_euc.get("material_mapping_confidence") or "Not Assessed"))
+                    legacy_sensitive_data_flag = c3.selectbox("Legacy sensitive-data flag", ["", "No", "Yes", "Unknown"], index=option_index(["", "No", "Yes", "Unknown"], selected_euc.get("legacy_sensitive_data_flag") or ""))
+                    legacy_criticality = c1.selectbox("Legacy criticality", ["", "Low", "Medium", "High", "Very High", "Unknown"], index=option_index(["", "Low", "Medium", "High", "Very High", "Unknown"], selected_euc.get("legacy_criticality") or ""))
+                    documentation_gap_required = c2.selectbox("Documentation gap assessment required?", ["No", "Yes"], index=option_index(["No", "Yes"], selected_euc.get("documentation_gap_assessment_required") or ("Yes" if selected_euc.get("onboarding_type") == "Legacy EUC" else "No")))
+                    migration_notes = st.text_area("Migration notes", value=selected_euc.get("migration_notes") or "")
+                    documentation_gaps_summary = st.text_area("Documentation gaps summary", value=selected_euc.get("documentation_gaps_summary") or "")
+                    if st.form_submit_button("Save migration/completeness metadata"):
+                        payload = dict(selected_euc)
+                        payload.update({
+                            "migration_status": migration_status,
+                            "migration_notes": migration_notes,
+                            "material_mapping_confidence": material_mapping_confidence,
+                            "legacy_sensitive_data_flag": legacy_sensitive_data_flag,
+                            "legacy_criticality": legacy_criticality,
+                            "documentation_gap_assessment_required": documentation_gap_required,
+                            "documentation_gaps_summary": documentation_gaps_summary,
+                        })
+                        svc.update_euc(int(selected_euc["euc_id"]), payload, username)
+                        st.success("Inventory completeness / migration metadata updated.")
+                        rerun()
+
+    with tabs[6]:
         st.info("The app no longer auto-seeds EUC operational data on startup. Use the button below only when you explicitly want to load demo EUCs.")
         if st.button("Run seed data loader", type="secondary"):
             seed_database(force=False)

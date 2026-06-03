@@ -96,3 +96,14 @@ Implemented additions:
 - Reports & KPIs additions for documentation gaps, high-criticality review coverage, and lineage completeness.
 
 Library of Controls remains a document/evidence attachment type and is not implemented as a separate structured control-register module.
+
+## Post-registration governance field placement
+
+The Register New EUC page no longer asks EUC Owners for the former "Inventory completeness, evidence and migration summary" fields during initial registration. Those items are maintained after registration in the appropriate workflow locations:
+
+- EUC Detail View: derived inventory completeness/governance status, registration/go-live dates, material mapping confidence and legacy flags.
+- Documents & Evidence Pack: Evidence Pack index/location, Library of Controls attachment reference and optional external risk-assessment reference.
+- Required Artifact Checklist: documentation gap assessment required flag, documentation gap summary and detailed documentation-gap workflow.
+- GCC Monitoring View and Admin Configuration: portfolio-level inventory completeness/migration monitoring and migration metadata updates.
+
+Library of Controls remains an uploaded attachment/evidence type rather than a structured database module.

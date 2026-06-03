@@ -3440,6 +3440,30 @@ def data_validation_queue() -> pd.DataFrame:
     )
 
 
+
+def inventory_completeness_migration_dataset() -> pd.DataFrame:
+    """Portfolio view of post-registration inventory completeness and migration fields."""
+    return dataframe(
+        """
+        SELECT
+            e.euc_id, e.reference_id, e.name, e.owner, e.business_unit, e.lifecycle_status,
+            e.inherent_risk, e.residual_risk, e.documentation_completeness_status,
+            e.registration_date, e.go_live_date, e.evidence_pack_location, e.library_controls_link,
+            e.risk_assessment_link, e.documentation_gap_assessment_required, e.documentation_gaps_summary,
+            e.material_mapping_confidence, e.migration_status, e.migration_notes,
+            e.legacy_sensitive_data_flag, e.legacy_criticality,
+            COUNT(DISTINCT CASE WHEN g.status NOT IN ('Closed','Cancelled','Accepted Risk') THEN g.gap_id END) AS open_documentation_gaps,
+            COUNT(DISTINCT CASE WHEN d.status = 'Accepted' THEN d.document_id END) AS accepted_evidence_count,
+            COUNT(DISTINCT c.component_id) AS asset_count
+        FROM eucs e
+        LEFT JOIN documentation_gaps g ON g.euc_id = e.euc_id
+        LEFT JOIN documents d ON d.euc_id = e.euc_id
+        LEFT JOIN components c ON c.euc_id = e.euc_id
+        GROUP BY e.euc_id
+        ORDER BY e.business_unit, e.reference_id
+        """
+    )
+
 def gcc_monitoring_dataset() -> dict[str, pd.DataFrame]:
     return {
         "risk_distribution": dataframe("SELECT residual_risk, COUNT(*) AS count FROM eucs GROUP BY residual_risk"),
@@ -3455,6 +3479,7 @@ def gcc_monitoring_dataset() -> dict[str, pd.DataFrame]:
         "documentation_gaps": get_documentation_gaps(open_only=True),
         "high_criticality_reviews": get_high_criticality_reviews(),
         "industrialization_assessments": get_industrialization_assessments(),
+        "inventory_completeness_migration": inventory_completeness_migration_dataset(),
     }
 
 
