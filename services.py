@@ -1484,6 +1484,15 @@ def create_euc(payload: dict[str, Any], username: str) -> int:
         "euc_operationalization_document_link", "policy242_operationalization_link", "bcbs239_elevated_inherent_override",
         "backup_path_documented", "last_restore_drill_date", "deputy_cover", "knowledge_transfer_evidence",
         "critical_dependencies_documented",
+        "registration_date", "go_live_date", "materiality_criterion_1", "materiality_criterion_2", "materiality_criterion_3",
+        "material_report_mapping", "material_kri_mapping", "material_model_mapping", "evidence_pack_location",
+        "library_controls_link", "risk_assessment_link", "baseline_controls_complete", "four_eye_review_required",
+        "high_criticality_evidence_pack_required", "access_control_evidence_status", "reconciliation_control_evidence_status",
+        "testing_evidence_status", "uat_evidence_status", "approval_signoff_evidence_status",
+        "documentation_gap_assessment_required", "documentation_gaps_summary", "remediation_action_owner",
+        "remediation_target_date", "incident_near_miss_count", "last_incident_date", "material_mapping_confidence",
+        "migration_status", "migration_notes", "legacy_sensitive_data_flag", "legacy_criticality",
+
     ]
     values_by_field = {
         **payload,
@@ -1599,6 +1608,15 @@ def update_euc(euc_id: int, payload: dict[str, Any], username: str) -> None:
         "deputy_cover",
         "knowledge_transfer_evidence",
         "critical_dependencies_documented",
+        "registration_date", "go_live_date", "materiality_criterion_1", "materiality_criterion_2", "materiality_criterion_3",
+        "material_report_mapping", "material_kri_mapping", "material_model_mapping", "evidence_pack_location",
+        "library_controls_link", "risk_assessment_link", "baseline_controls_complete", "four_eye_review_required",
+        "high_criticality_evidence_pack_required", "access_control_evidence_status", "reconciliation_control_evidence_status",
+        "testing_evidence_status", "uat_evidence_status", "approval_signoff_evidence_status",
+        "documentation_gap_assessment_required", "documentation_gaps_summary", "remediation_action_owner",
+        "remediation_target_date", "incident_near_miss_count", "last_incident_date", "material_mapping_confidence",
+        "migration_status", "migration_notes", "legacy_sensitive_data_flag", "legacy_criticality",
+
     ]
     assignments = ", ".join([f"{field} = ?" for field in allowed_fields])
     values = [payload.get(field, old.get(field)) for field in allowed_fields]
@@ -1657,6 +1675,14 @@ COMPONENT_FIELDS = [
     "controlled_storage_location", "input_sources", "asset_cut_off", "processing_schedule", "execution_frequency",
     "cde_mappings", "data_outputs", "level_of_automation", "backup_recovery_arrangements", "spof_risk",
     "modification_date", "review_date",
+    "cots_third_party_component", "vendor_tool_name", "asset_support_contract_sla", "vendor_support_status",
+    "end_of_support_date", "approved_corporate_environment", "personal_byod_storage_used",
+    "required_input_availability_time", "expected_run_duration", "timeliness_monitoring_performed",
+    "fallback_bcp_steps_link", "asset_last_restore_test_date", "asset_deputy_cover", "key_person_dependency_mitigated",
+    "version_release_identifier", "change_log_link", "latest_release_notes_link", "retention_evidence_location",
+    "data_classification", "external_sharing", "material_mapping_confidence", "asset_migration_status",
+    "asset_migration_notes", "legacy_sensitive_data_flag", "legacy_criticality", "legacy_support_contract_sla",
+
 ]
 
 
@@ -3211,28 +3237,24 @@ def get_exceptions(euc_id: int | None = None, open_only: bool = False) -> pd.Dat
 
 
 def create_exception(payload: dict[str, Any], username: str) -> int:
+    fields = [
+        "euc_id", "control_gap", "root_cause", "compensating_controls", "residual_risk", "remediation_plan",
+        "target_date", "expiry_date", "approval_status", "approved_by", "status", "exception_owner",
+        "milestones", "monitoring_approach", "periodic_review_date", "renewal_status", "renewal_request_reason",
+        "renewal_evidence_document_id", "escalation_required", "escalation_to", "escalation_date",
+        "senior_management_approval", "bcbs239_steering_reported", "unit_head_approval", "closure_evidence_document_id",
+        "created_at",
+    ]
+    values = {
+        **payload,
+        "approval_status": payload.get("approval_status", "Pending"),
+        "status": payload.get("status", "Open"),
+        "exception_owner": payload.get("exception_owner") or payload.get("assigned_to") or username,
+        "created_at": utc_now(),
+    }
     exception_id = execute(
-        """
-        INSERT INTO exceptions(
-            euc_id, control_gap, root_cause, compensating_controls, residual_risk, remediation_plan,
-            target_date, expiry_date, approval_status, approved_by, status, created_at, closure_evidence_document_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            payload["euc_id"],
-            payload["control_gap"],
-            payload.get("root_cause"),
-            payload.get("compensating_controls"),
-            payload.get("residual_risk"),
-            payload.get("remediation_plan"),
-            payload.get("target_date"),
-            payload.get("expiry_date"),
-            payload.get("approval_status", "Pending"),
-            payload.get("approved_by"),
-            payload.get("status", "Open"),
-            utc_now(),
-            payload.get("closure_evidence_document_id"),
-        ),
+        f"INSERT INTO exceptions({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)})",
+        tuple(values.get(field) for field in fields),
     )
     insert_audit("Exception", exception_id, "CREATE", username, None, payload)
     queue_raci_notifications(
@@ -3241,7 +3263,12 @@ def create_exception(payload: dict[str, Any], username: str) -> int:
         exception_id,
         payload["euc_id"],
         username,
-        context={"Control gap": payload.get("control_gap"), "Residual risk": payload.get("residual_risk"), "Approval status": payload.get("approval_status", "Pending")},
+        context={
+            "Control gap": payload.get("control_gap"),
+            "Residual risk": payload.get("residual_risk"),
+            "Approval status": payload.get("approval_status", "Pending"),
+            "Escalation required": payload.get("escalation_required"),
+        },
     )
     update_euc_status(payload["euc_id"], "Exception Active", username, "Exception active")
     create_task(
@@ -3252,7 +3279,7 @@ def create_exception(payload: dict[str, Any], username: str) -> int:
         assigned_to=None,
         assigned_role=APPROVER_ROLE,
         due_date=add_days(7),
-        priority="High",
+        priority="Critical" if payload.get("residual_risk") == "Very High" else "High",
         username=username,
     )
     return exception_id
@@ -3298,25 +3325,25 @@ def get_incidents(euc_id: int | None = None, open_only: bool = False) -> pd.Data
 
 
 def create_incident(payload: dict[str, Any], username: str) -> int:
+    fields = [
+        "euc_id", "affected_outputs", "incident_date", "detection_date", "reporting_period_run", "reported_by",
+        "incident_type", "incident_description", "impact_summary", "impact_description", "severity", "cacrt_dimension",
+        "root_cause_category", "root_cause_description", "containment_status", "correction_status", "rca_status",
+        "immediate_action_taken", "corrective_action", "preventive_action", "remediation_actions", "action_owner",
+        "target_resolution_date", "resolution_date", "linked_residual_risk_level", "regulatory_impact", "escalated",
+        "escalation_date", "escalation_to", "restatement_reissue_required", "exception_raised", "reference_links_evidence",
+        "comments", "status", "created_at",
+    ]
+    values = {
+        **payload,
+        "incident_date": payload.get("incident_date", date.today().isoformat()),
+        "reported_by": payload.get("reported_by") or username,
+        "status": payload.get("status", "Open"),
+        "created_at": utc_now(),
+    }
     incident_id = execute(
-        """
-        INSERT INTO incidents(
-            euc_id, affected_outputs, incident_date, impact_summary, containment_status,
-            correction_status, rca_status, remediation_actions, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            payload["euc_id"],
-            payload.get("affected_outputs"),
-            payload.get("incident_date", date.today().isoformat()),
-            payload.get("impact_summary"),
-            payload.get("containment_status"),
-            payload.get("correction_status"),
-            payload.get("rca_status"),
-            payload.get("remediation_actions"),
-            payload.get("status", "Open"),
-            utc_now(),
-        ),
+        f"INSERT INTO incidents({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)})",
+        tuple(values.get(field) for field in fields),
     )
     insert_audit("Incident", incident_id, "CREATE", username, None, payload)
     queue_raci_notifications(
@@ -3325,12 +3352,21 @@ def create_incident(payload: dict[str, Any], username: str) -> int:
         incident_id,
         payload["euc_id"],
         username,
-        context={"Incident date": payload.get("incident_date"), "Affected outputs": payload.get("affected_outputs"), "Status": payload.get("status", "Open")},
+        context={
+            "Incident date": values.get("incident_date"),
+            "Affected outputs": payload.get("affected_outputs"),
+            "Severity": payload.get("severity"),
+            "Status": values.get("status"),
+        },
     )
     euc = get_euc(payload["euc_id"])
+    execute(
+        "UPDATE eucs SET incident_near_miss_count = COALESCE(incident_near_miss_count, 0) + 1, last_incident_date = ?, updated_at = ? WHERE euc_id = ?",
+        (values.get("incident_date"), utc_now(), payload["euc_id"]),
+    )
     update_euc_status(payload["euc_id"], "Incident Open", username, "Incident open")
-    create_task(payload["euc_id"], "Reassessment", f"Reassess EUC after incident {incident_id}", payload.get("impact_summary"), euc.get("owner") if euc else None, OWNER_ROLE, add_days(DEFAULT_DUE_DAYS["Reassessment"]), "High", username)
-    create_task(payload["euc_id"], "Documentation refresh", f"Refresh documentation after incident {incident_id}", payload.get("remediation_actions"), euc.get("owner") if euc else None, OWNER_ROLE, add_days(DEFAULT_DUE_DAYS["Documentation refresh"]), "High", username)
+    create_task(payload["euc_id"], "Reassessment", f"Reassess EUC after incident {incident_id}", payload.get("impact_summary") or payload.get("impact_description"), euc.get("owner") if euc else None, OWNER_ROLE, add_days(DEFAULT_DUE_DAYS["Reassessment"]), "High", username)
+    create_task(payload["euc_id"], "Documentation refresh", f"Refresh documentation after incident {incident_id}", payload.get("remediation_actions") or payload.get("corrective_action"), euc.get("owner") if euc else None, OWNER_ROLE, add_days(DEFAULT_DUE_DAYS["Documentation refresh"]), "High", username)
     return incident_id
 
 
@@ -3347,24 +3383,30 @@ def get_material_changes(euc_id: int | None = None) -> pd.DataFrame:
 
 
 def create_material_change(payload: dict[str, Any], username: str) -> int:
+    fields = [
+        "euc_id", "change_type", "description", "change_request_rationale", "impact_assessment", "cutover_plan",
+        "rollback_approach", "change_stage", "testing_required", "uat_required", "approval_required", "approval_status",
+        "approved_by", "approval_date", "reassessment_required", "documentation_refresh_required",
+        "library_controls_update_required", "evidence_pack_update_detail", "stakeholder_communication",
+        "communication_date", "effective_date", "emergency_change", "retro_uat_required", "status", "created_by", "created_at",
+    ]
+    values = {
+        **payload,
+        "testing_required": int(bool(payload.get("testing_required"))),
+        "uat_required": int(bool(payload.get("uat_required"))),
+        "approval_required": int(bool(payload.get("approval_required"))),
+        "reassessment_required": int(bool(payload.get("reassessment_required"))),
+        "documentation_refresh_required": int(bool(payload.get("documentation_refresh_required"))),
+        "library_controls_update_required": int(bool(payload.get("library_controls_update_required"))),
+        "emergency_change": int(bool(payload.get("emergency_change"))),
+        "retro_uat_required": int(bool(payload.get("retro_uat_required"))),
+        "status": payload.get("status", "Open"),
+        "created_by": username,
+        "created_at": utc_now(),
+    }
     change_id = execute(
-        """
-        INSERT INTO material_changes(
-            euc_id, change_type, description, impact_assessment, reassessment_required,
-            documentation_refresh_required, status, created_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            payload["euc_id"],
-            payload["change_type"],
-            payload["description"],
-            payload.get("impact_assessment"),
-            int(bool(payload.get("reassessment_required"))),
-            int(bool(payload.get("documentation_refresh_required"))),
-            payload.get("status", "Open"),
-            username,
-            utc_now(),
-        ),
+        f"INSERT INTO material_changes({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)})",
+        tuple(values.get(field) for field in fields),
     )
     insert_audit("Material Change", change_id, "CREATE", username, None, payload)
     queue_raci_notifications(
@@ -3381,6 +3423,8 @@ def create_material_change(payload: dict[str, Any], username: str) -> int:
         create_task(payload["euc_id"], "Reassessment", f"Reassess EUC after material change {change_id}", payload.get("impact_assessment"), euc.get("owner") if euc else None, OWNER_ROLE, add_days(DEFAULT_DUE_DAYS["Reassessment"]), "High", username)
     if payload.get("documentation_refresh_required"):
         create_task(payload["euc_id"], "Documentation refresh", f"Refresh documentation after material change {change_id}", payload.get("description"), euc.get("owner") if euc else None, OWNER_ROLE, add_days(DEFAULT_DUE_DAYS["Documentation refresh"]), "Medium", username)
+    if payload.get("library_controls_update_required"):
+        create_task(payload["euc_id"], "Documentation refresh", f"Refresh Library of Controls after material change {change_id}", payload.get("description"), euc.get("owner") if euc else None, OWNER_ROLE, add_days(DEFAULT_DUE_DAYS["Documentation refresh"]), "Medium", username)
     return change_id
 
 
@@ -3408,6 +3452,9 @@ def gcc_monitoring_dataset() -> dict[str, pd.DataFrame]:
         "spof": dataframe("SELECT reference_id, name, owner, residual_risk, spof_indicator FROM eucs WHERE spof_indicator = 'Yes'"),
         "industrialization": dataframe("SELECT reference_id, name, owner, residual_risk, industrialization_rationale FROM eucs WHERE lifecycle_status = 'Industrialization Candidate'"),
         "decommissioning": dataframe("SELECT reference_id, name, owner, residual_risk, decommissioning_rationale FROM eucs WHERE lifecycle_status IN ('Decommissioned','Archived') OR overall_status = 'Decommissioned'"),
+        "documentation_gaps": get_documentation_gaps(open_only=True),
+        "high_criticality_reviews": get_high_criticality_reviews(),
+        "industrialization_assessments": get_industrialization_assessments(),
     }
 
 
@@ -3613,6 +3660,24 @@ POLICY_REPORTS = [
         "description": "Industrialization candidates, decommissioned/archived EUCs and scoring signals.",
     },
     {
+        "key": "high_criticality_review_coverage",
+        "name": "High-criticality Evidence Pack / Independent Review coverage",
+        "policy_basis": "Policy 2.2.6 requires High-Criticality Evidence Pack and Independent Review checklist for material BCBS 239 High/Very High inherent EUCs.",
+        "description": "Shows material BCBS 239 High/Very High inherent EUCs and latest high-criticality review outcome.",
+    },
+    {
+        "key": "documentation_gap_pipeline",
+        "name": "Legacy onboarding documentation gaps and dispositions",
+        "policy_basis": "Legacy onboarding requires identification of documentation, control and evidence gaps, with remediation actions, exceptions or risk acceptance where gaps cannot be closed immediately.",
+        "description": "Shows open and closed documentation gaps, disposition, severity, owner and target date.",
+    },
+    {
+        "key": "lineage_completeness",
+        "name": "High / Very High inherent EUCs with complete lineage",
+        "policy_basis": "Policy 2.2.7 requires % High/Very High inherent EUCs with complete lineage.",
+        "description": "Flags High/Very High inherent EUCs with documented inputs, outputs, dependencies, CDE linkages and asset-level lineage data.",
+    },
+    {
         "key": "overdue_reviews",
         "name": "Overdue reviews",
         "policy_basis": "Policy 2.2.2 and 2.2.7 require reporting of overdue reviews.",
@@ -3630,6 +3695,9 @@ CUSTOM_REPORT_DATASETS = {
     "Incidents": "incidents",
     "Material Changes": "material_changes",
     "Components / Assets": "components",
+    "Documentation Gaps": "documentation_gaps",
+    "High-Criticality Reviews": "high_criticality_reviews",
+    "Industrialization Assessments": "industrialization_assessments",
 }
 
 
@@ -3747,6 +3815,8 @@ def policy_kpi_cards(filters: dict[str, Any] | None = None) -> dict[str, Any]:
         "Industrialization candidates": int(row.get("industrialization_candidates") or 0),
         "Library of Controls coverage %": round((with_library / total * 100), 1) if total else 0.0,
         "Operationalization documentation %": round((with_op / mapped * 100), 1) if mapped else 0.0,
+        "Open documentation gaps": _count("SELECT COUNT(*) AS n FROM documentation_gaps WHERE status NOT IN ('Closed','Cancelled','Accepted Risk')"),
+        "High-criticality reviews": _count("SELECT COUNT(*) AS n FROM high_criticality_reviews"),
     }
 
 
@@ -3930,6 +4000,58 @@ def run_policy_report(report_key: str, filters: dict[str, Any] | None = None) ->
             """,
             tuple(params),
         )
+    if report_key == "high_criticality_review_coverage":
+        return dataframe(
+            f"""
+            SELECT e.reference_id, e.name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk,
+                   e.supports_material_report, e.supports_material_kri, e.supports_material_model,
+                   CASE WHEN h.review_id IS NULL THEN 'Missing review' ELSE h.overall_outcome END AS latest_review_outcome,
+                   h.review_date, h.reviewer
+            FROM eucs e
+            LEFT JOIN (
+                SELECT h1.* FROM high_criticality_reviews h1
+                JOIN (SELECT euc_id, MAX(review_id) AS max_review_id FROM high_criticality_reviews GROUP BY euc_id) latest
+                  ON latest.max_review_id = h1.review_id
+            ) h ON h.euc_id = e.euc_id
+            WHERE {where}
+              AND e.inherent_risk IN ('High','Very High')
+              AND (e.supports_material_report = 'Yes' OR e.supports_material_kri = 'Yes' OR e.supports_material_model = 'Yes')
+            ORDER BY latest_review_outcome DESC, e.inherent_risk DESC, e.reference_id
+            """,
+            tuple(params),
+        )
+    if report_key == "documentation_gap_pipeline":
+        return dataframe(
+            f"""
+            SELECT g.gap_id, e.reference_id, e.name, e.owner, e.business_unit, g.gap_area, g.related_artifact,
+                   g.severity, g.disposition, g.status, g.target_date, g.owner AS gap_owner, g.closure_comments
+            FROM documentation_gaps g JOIN eucs e ON e.euc_id = g.euc_id
+            WHERE {where}
+            ORDER BY CASE g.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END, date(g.target_date)
+            """,
+            tuple(params),
+        )
+    if report_key == "lineage_completeness":
+        return dataframe(
+            f"""
+            SELECT e.reference_id, e.name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk,
+                   CASE WHEN COALESCE(NULLIF(TRIM(e.inputs), ''), '') <> '' THEN 1 ELSE 0 END AS has_inputs,
+                   CASE WHEN COALESCE(NULLIF(TRIM(e.outputs), ''), '') <> '' THEN 1 ELSE 0 END AS has_outputs,
+                   CASE WHEN COALESCE(NULLIF(TRIM(e.dependencies), ''), '') <> '' THEN 1 ELSE 0 END AS has_dependencies,
+                   CASE WHEN COALESCE(NULLIF(TRIM(e.cde_linkage), ''), '') <> '' THEN 1 ELSE 0 END AS has_cde_linkage,
+                   CASE WHEN EXISTS (SELECT 1 FROM components c WHERE c.euc_id = e.euc_id AND COALESCE(NULLIF(TRIM(c.input_sources), ''), '') <> '' AND COALESCE(NULLIF(TRIM(c.data_outputs), ''), '') <> '') THEN 1 ELSE 0 END AS has_asset_lineage,
+                   CASE WHEN COALESCE(NULLIF(TRIM(e.inputs), ''), '') <> ''
+                         AND COALESCE(NULLIF(TRIM(e.outputs), ''), '') <> ''
+                         AND COALESCE(NULLIF(TRIM(e.dependencies), ''), '') <> ''
+                         AND COALESCE(NULLIF(TRIM(e.cde_linkage), ''), '') <> ''
+                         AND EXISTS (SELECT 1 FROM components c WHERE c.euc_id = e.euc_id AND COALESCE(NULLIF(TRIM(c.input_sources), ''), '') <> '' AND COALESCE(NULLIF(TRIM(c.data_outputs), ''), '') <> '')
+                        THEN 'Complete' ELSE 'Incomplete' END AS lineage_status
+            FROM eucs e
+            WHERE {where} AND e.inherent_risk IN ('High','Very High')
+            ORDER BY lineage_status DESC, e.inherent_risk DESC, e.reference_id
+            """,
+            tuple(params),
+        )
     return pd.DataFrame()
 
 
@@ -3973,6 +4095,12 @@ def _custom_dataset_df(dataset: str) -> pd.DataFrame:
             SELECT c.*, e.reference_id, e.name AS euc_name, e.owner AS euc_owner, e.business_unit, e.inherent_risk, e.residual_risk
             FROM components c JOIN eucs e ON e.euc_id = c.euc_id ORDER BY e.reference_id, c.component_name
         """)
+    if dataset == "Documentation Gaps":
+        return get_documentation_gaps(open_only=False)
+    if dataset == "High-Criticality Reviews":
+        return get_high_criticality_reviews()
+    if dataset == "Industrialization Assessments":
+        return get_industrialization_assessments()
     return pd.DataFrame()
 
 
@@ -4069,6 +4197,128 @@ def deactivate_custom_report_definition(report_id: int, username: str) -> None:
         return
     execute("UPDATE custom_report_definitions SET active_flag = 0, updated_by = ?, updated_at = ? WHERE report_id = ?", (username, utc_now(), report_id))
     insert_audit("Custom Report", report_id, "DEACTIVATE", username, old, {"active_flag": 0})
+
+
+
+def get_documentation_gaps(euc_id: int | None = None, open_only: bool = False) -> pd.DataFrame:
+    where = []
+    params: list[Any] = []
+    if euc_id:
+        where.append("g.euc_id = ?")
+        params.append(euc_id)
+    if open_only:
+        where.append("g.status NOT IN ('Closed','Cancelled','Accepted Risk')")
+    sql = """
+        SELECT g.*, e.reference_id, e.name AS euc_name, e.owner AS euc_owner, e.business_unit
+        FROM documentation_gaps g JOIN eucs e ON e.euc_id = g.euc_id
+    """
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY CASE g.severity WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END, date(g.target_date)"
+    return dataframe(sql, tuple(params))
+
+
+def create_documentation_gap(payload: dict[str, Any], username: str) -> int:
+    fields = ["euc_id", "gap_area", "gap_description", "related_artifact", "severity", "owner", "target_date", "disposition", "status", "exception_id", "task_id", "created_by", "created_at", "closure_comments"]
+    values = {**payload, "status": payload.get("status", "Open"), "created_by": username, "created_at": utc_now()}
+    gap_id = execute(
+        f"INSERT INTO documentation_gaps({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)})",
+        tuple(values.get(field) for field in fields),
+    )
+    task_id = None
+    if values.get("disposition") in {"Remediation action", "Remediation", None, ""}:
+        task_id = create_task(
+            euc_id=payload["euc_id"],
+            task_type="Remediation",
+            title=f"Close documentation/control gap {gap_id}: {payload.get('gap_area')}",
+            description=payload.get("gap_description"),
+            assigned_to=payload.get("owner"),
+            assigned_role=OWNER_ROLE,
+            due_date=payload.get("target_date") or add_days(DEFAULT_DUE_DAYS["Remediation"]),
+            priority="High" if payload.get("severity") in {"High", "Critical"} else "Medium",
+            username=username,
+        )
+        execute("UPDATE documentation_gaps SET task_id = ? WHERE gap_id = ?", (task_id, gap_id))
+    insert_audit("Documentation Gap", gap_id, "CREATE", username, None, payload)
+    queue_raci_notifications("EUC_UPDATED", "Documentation Gap", gap_id, payload["euc_id"], username, context={"Gap area": payload.get("gap_area"), "Severity": payload.get("severity")})
+    return gap_id
+
+
+def update_documentation_gap(gap_id: int, status: str, closure_comments: str, username: str) -> None:
+    old = fetch_one("SELECT * FROM documentation_gaps WHERE gap_id = ?", (gap_id,))
+    if not old:
+        raise ValueError("Documentation gap not found")
+    closed_at = utc_now() if status in {"Closed", "Cancelled", "Accepted Risk"} else None
+    execute("UPDATE documentation_gaps SET status = ?, closure_comments = ?, closed_at = ? WHERE gap_id = ?", (status, closure_comments, closed_at, gap_id))
+    insert_audit("Documentation Gap", gap_id, "UPDATE", username, old, {"status": status, "closure_comments": closure_comments})
+    if closed_at and old.get("task_id"):
+        close_task_if_open(int(old["task_id"]), username, f"Documentation gap {gap_id} marked {status}.")
+
+
+def high_criticality_required(euc: dict[str, Any] | None) -> bool:
+    if not euc:
+        return False
+    material = any(str(euc.get(col) or "").strip().lower() == "yes" for col in ("supports_material_report", "supports_material_kri", "supports_material_model"))
+    inherent = euc.get("inherent_risk") or "Medium"
+    return material and inherent in {"High", "Very High"}
+
+
+def get_high_criticality_reviews(euc_id: int | None = None) -> pd.DataFrame:
+    if euc_id:
+        return dataframe("SELECT * FROM high_criticality_reviews WHERE euc_id = ? ORDER BY review_date DESC, review_id DESC", (euc_id,))
+    return dataframe("""
+        SELECT h.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit, e.inherent_risk, e.residual_risk
+        FROM high_criticality_reviews h JOIN eucs e ON e.euc_id = h.euc_id
+        ORDER BY h.review_date DESC, h.review_id DESC
+    """)
+
+
+def create_high_criticality_review(payload: dict[str, Any], username: str) -> int:
+    fields = [
+        "euc_id", "reviewer", "review_date", "mandatory_flag", "overview_governance", "scope_purpose", "lineage_data",
+        "design_logic", "controls_reconciliations", "testing_sufficiency", "security_access", "resilience",
+        "independent_review_conclusion", "controls_evidence_index", "overall_outcome", "comments", "created_at",
+    ]
+    values = {**payload, "reviewer": payload.get("reviewer") or username, "review_date": payload.get("review_date") or date.today().isoformat(), "created_at": utc_now()}
+    review_id = execute(
+        f"INSERT INTO high_criticality_reviews({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)})",
+        tuple(values.get(field) for field in fields),
+    )
+    insert_audit("High Criticality Review", review_id, "CREATE", username, None, payload)
+    queue_raci_notifications("INDEPENDENT_REVIEW_COMPLETED", "High Criticality Review", review_id, payload["euc_id"], username, context={"Outcome": payload.get("overall_outcome")})
+    return review_id
+
+
+def get_industrialization_assessments(euc_id: int | None = None) -> pd.DataFrame:
+    if euc_id:
+        return dataframe("SELECT * FROM industrialization_assessments WHERE euc_id = ? ORDER BY assessment_date DESC, assessment_id DESC", (euc_id,))
+    return dataframe("""
+        SELECT a.*, e.reference_id, e.name AS euc_name, e.owner, e.business_unit, e.lifecycle_status
+        FROM industrialization_assessments a JOIN eucs e ON e.euc_id = a.euc_id
+        ORDER BY a.total_score DESC, a.assessment_date DESC
+    """)
+
+
+def industrialization_priority_band(total_score: int) -> str:
+    if total_score >= 10:
+        return "Fast-track"
+    if total_score >= 7:
+        return "Prioritized"
+    return "Monitor"
+
+
+def create_industrialization_assessment(payload: dict[str, Any], username: str) -> int:
+    total = sum(int(payload.get(field) or 0) for field in ["bcbs_score", "residual_score", "operational_score", "frequency_volume_score", "strategic_fit_score"])
+    values = {**payload, "total_score": total, "priority_band": payload.get("priority_band") or industrialization_priority_band(total), "assessed_by": username, "assessment_date": payload.get("assessment_date") or date.today().isoformat(), "created_at": utc_now()}
+    fields = ["euc_id", "bcbs_score", "residual_score", "operational_score", "frequency_volume_score", "strategic_fit_score", "total_score", "priority_band", "decision", "decision_rationale", "assessed_by", "assessment_date", "created_at"]
+    assessment_id = execute(
+        f"INSERT INTO industrialization_assessments({', '.join(fields)}) VALUES ({', '.join('?' for _ in fields)})",
+        tuple(values.get(field) for field in fields),
+    )
+    insert_audit("Industrialization Assessment", assessment_id, "CREATE", username, None, values)
+    queue_raci_notifications("INDUSTRIALIZATION_DECISION", "Industrialization Assessment", assessment_id, payload["euc_id"], username, context={"Total score": total, "Priority band": values.get("priority_band"), "Decision": values.get("decision")})
+    return assessment_id
+
 
 def audit_trail(filters: dict[str, Any] | None = None) -> pd.DataFrame:
     filters = filters or {}

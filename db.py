@@ -53,13 +53,37 @@ def init_db() -> None:
     apply those additions from CREATE TABLE IF NOT EXISTS. Lightweight
     migrations therefore have to run before index creation and before any
     reference-data seeding.
+
+    Each CREATE TABLE and CREATE INDEX statement is executed individually and
+    logged if it fails. This makes clean-deployment startup errors diagnosable
+    from Streamlit Cloud logs instead of surfacing only a redacted UI error.
     """
     with get_connection() as conn:
-        for stmt in CREATE_TABLES_SQL:
-            conn.execute(stmt)
+        for i, stmt in enumerate(CREATE_TABLES_SQL, start=1):
+            try:
+                conn.execute(stmt)
+            except Exception as exc:
+                print("\n" + "=" * 100)
+                print(f"FAILED CREATE_TABLES_SQL statement #{i}")
+                print(type(exc).__name__, str(exc))
+                print("-" * 100)
+                print(stmt)
+                print("=" * 100 + "\n")
+                raise
+
         _apply_lightweight_migrations(conn)
-        for stmt in INDEX_SQL:
-            conn.execute(stmt)
+
+        for i, stmt in enumerate(INDEX_SQL, start=1):
+            try:
+                conn.execute(stmt)
+            except Exception as exc:
+                print("\n" + "=" * 100)
+                print(f"FAILED INDEX_SQL statement #{i}")
+                print(type(exc).__name__, str(exc))
+                print("-" * 100)
+                print(stmt)
+                print("=" * 100 + "\n")
+                raise
 
 
 def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
@@ -120,6 +144,36 @@ def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
             "last_restore_drill_date": "TEXT",
             "deputy_cover": "TEXT",
             "knowledge_transfer_evidence": "TEXT",
+            "registration_date": "TEXT",
+            "go_live_date": "TEXT",
+            "materiality_criterion_1": "TEXT",
+            "materiality_criterion_2": "TEXT",
+            "materiality_criterion_3": "TEXT",
+            "material_report_mapping": "TEXT",
+            "material_kri_mapping": "TEXT",
+            "material_model_mapping": "TEXT",
+            "evidence_pack_location": "TEXT",
+            "library_controls_link": "TEXT",
+            "risk_assessment_link": "TEXT",
+            "baseline_controls_complete": "TEXT",
+            "four_eye_review_required": "TEXT",
+            "high_criticality_evidence_pack_required": "TEXT",
+            "access_control_evidence_status": "TEXT",
+            "reconciliation_control_evidence_status": "TEXT",
+            "testing_evidence_status": "TEXT",
+            "uat_evidence_status": "TEXT",
+            "approval_signoff_evidence_status": "TEXT",
+            "documentation_gap_assessment_required": "TEXT",
+            "documentation_gaps_summary": "TEXT",
+            "remediation_action_owner": "TEXT",
+            "remediation_target_date": "TEXT",
+            "incident_near_miss_count": "INTEGER DEFAULT 0",
+            "last_incident_date": "TEXT",
+            "material_mapping_confidence": "TEXT",
+            "migration_status": "TEXT",
+            "migration_notes": "TEXT",
+            "legacy_sensitive_data_flag": "TEXT",
+            "legacy_criticality": "TEXT",
             "critical_dependencies_documented": "TEXT",
         },
         "documents": {
@@ -127,6 +181,7 @@ def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
             "evidence_group_id": "TEXT",
         },
         "components": {
+            "rrf_mapping": "TEXT",
             "operationalization_document_link": "TEXT",
             "file_description": "TEXT",
             "technology_type": "TEXT",
@@ -144,8 +199,142 @@ def _apply_lightweight_migrations(conn: sqlite3.Connection) -> None:
             "spof_risk": "TEXT",
             "modification_date": "TEXT",
             "review_date": "TEXT",
+            "cots_third_party_component": "TEXT",
+            "vendor_tool_name": "TEXT",
+            "asset_support_contract_sla": "TEXT",
+            "vendor_support_status": "TEXT",
+            "end_of_support_date": "TEXT",
+            "approved_corporate_environment": "TEXT",
+            "personal_byod_storage_used": "TEXT",
+            "required_input_availability_time": "TEXT",
+            "expected_run_duration": "TEXT",
+            "timeliness_monitoring_performed": "TEXT",
+            "fallback_bcp_steps_link": "TEXT",
+            "asset_last_restore_test_date": "TEXT",
+            "asset_deputy_cover": "TEXT",
+            "key_person_dependency_mitigated": "TEXT",
+            "version_release_identifier": "TEXT",
+            "change_log_link": "TEXT",
+            "latest_release_notes_link": "TEXT",
+            "retention_evidence_location": "TEXT",
+            "data_classification": "TEXT",
+            "external_sharing": "TEXT",
+            "material_mapping_confidence": "TEXT",
+            "asset_migration_status": "TEXT",
+            "asset_migration_notes": "TEXT",
+            "legacy_sensitive_data_flag": "TEXT",
+            "legacy_criticality": "TEXT",
+            "legacy_support_contract_sla": "TEXT",
         },
-        "exceptions": {"closure_evidence_document_id": "INTEGER"},
+        "exceptions": {"closure_evidence_document_id": "INTEGER",
+            "exception_owner": "TEXT",
+            "milestones": "TEXT",
+            "monitoring_approach": "TEXT",
+            "periodic_review_date": "TEXT",
+            "renewal_status": "TEXT",
+            "renewal_request_reason": "TEXT",
+            "renewal_evidence_document_id": "INTEGER",
+            "escalation_required": "TEXT",
+            "escalation_to": "TEXT",
+            "escalation_date": "TEXT",
+            "senior_management_approval": "TEXT",
+            "bcbs239_steering_reported": "TEXT",
+            "unit_head_approval": "TEXT",
+        },
+        "incidents": {
+            "detection_date": "TEXT",
+            "reporting_period_run": "TEXT",
+            "reported_by": "TEXT",
+            "incident_type": "TEXT",
+            "incident_description": "TEXT",
+            "impact_description": "TEXT",
+            "severity": "TEXT",
+            "cacrt_dimension": "TEXT",
+            "root_cause_category": "TEXT",
+            "root_cause_description": "TEXT",
+            "immediate_action_taken": "TEXT",
+            "corrective_action": "TEXT",
+            "preventive_action": "TEXT",
+            "action_owner": "TEXT",
+            "target_resolution_date": "TEXT",
+            "resolution_date": "TEXT",
+            "linked_residual_risk_level": "TEXT",
+            "regulatory_impact": "TEXT",
+            "escalated": "TEXT",
+            "escalation_date": "TEXT",
+            "escalation_to": "TEXT",
+            "restatement_reissue_required": "TEXT",
+            "exception_raised": "TEXT",
+            "reference_links_evidence": "TEXT",
+            "comments": "TEXT",
+        },
+        "material_changes": {
+            "change_request_rationale": "TEXT",
+            "cutover_plan": "TEXT",
+            "rollback_approach": "TEXT",
+            "change_stage": "TEXT",
+            "testing_required": "INTEGER DEFAULT 0",
+            "uat_required": "INTEGER DEFAULT 0",
+            "approval_required": "INTEGER DEFAULT 0",
+            "approval_status": "TEXT",
+            "approved_by": "TEXT",
+            "approval_date": "TEXT",
+            "library_controls_update_required": "INTEGER DEFAULT 0",
+            "evidence_pack_update_detail": "TEXT",
+            "stakeholder_communication": "TEXT",
+            "communication_date": "TEXT",
+            "effective_date": "TEXT",
+            "emergency_change": "INTEGER DEFAULT 0",
+            "retro_uat_required": "INTEGER DEFAULT 0",
+        },
+        "documentation_gaps": {
+            "gap_area": "TEXT",
+            "gap_description": "TEXT",
+            "related_artifact": "TEXT",
+            "severity": "TEXT",
+            "owner": "TEXT",
+            "target_date": "TEXT",
+            "disposition": "TEXT",
+            "status": "TEXT",
+            "exception_id": "INTEGER",
+            "task_id": "INTEGER",
+            "created_by": "TEXT",
+            "created_at": "TEXT",
+            "closed_at": "TEXT",
+            "closure_comments": "TEXT",
+        },
+        "high_criticality_reviews": {
+            "reviewer": "TEXT",
+            "review_date": "TEXT",
+            "mandatory_flag": "INTEGER DEFAULT 0",
+            "overview_governance": "TEXT",
+            "scope_purpose": "TEXT",
+            "lineage_data": "TEXT",
+            "design_logic": "TEXT",
+            "controls_reconciliations": "TEXT",
+            "testing_sufficiency": "TEXT",
+            "security_access": "TEXT",
+            "resilience": "TEXT",
+            "independent_review_conclusion": "TEXT",
+            "controls_evidence_index": "TEXT",
+            "overall_outcome": "TEXT",
+            "comments": "TEXT",
+            "created_at": "TEXT",
+        },
+        "industrialization_assessments": {
+            "bcbs_score": "INTEGER DEFAULT 0",
+            "residual_score": "INTEGER DEFAULT 0",
+            "operational_score": "INTEGER DEFAULT 0",
+            "frequency_volume_score": "INTEGER DEFAULT 0",
+            "strategic_fit_score": "INTEGER DEFAULT 0",
+            "total_score": "INTEGER DEFAULT 0",
+            "priority_band": "TEXT",
+            "decision": "TEXT",
+            "decision_rationale": "TEXT",
+            "assessed_by": "TEXT",
+            "assessment_date": "TEXT",
+            "created_at": "TEXT",
+        },
         "user_profiles": {
             "username": "TEXT",
             "full_name": "TEXT",

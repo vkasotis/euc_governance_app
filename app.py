@@ -38,6 +38,7 @@ BUSINESS_UNITS = getattr(app_schema, "BUSINESS_UNITS", ["Risk Management", "Fina
 CACRT_DIMENSIONS = getattr(app_schema, "CACRT_DIMENSIONS", ["Completeness", "Accuracy", "Consistency", "Reasonableness", "Timeliness", "Traceability"])
 CDE_LINKAGE_OPTIONS = getattr(app_schema, "CDE_LINKAGE_OPTIONS", ["Customer ID", "Counterparty ID", "Account Number", "Facility ID", "Product Code", "Exposure Amount", "Outstanding Balance", "Collateral Value", "Currency", "Maturity Date", "Risk Weight", "Probability of Default", "Loss Given Default", "IFRS 9 Stage", "Impairment Allowance", "NPE Flag", "Forbearance Flag", "Liquidity Metric", "Capital Metric", "Other CDE"])
 CHANGE_TYPES = getattr(app_schema, "CHANGE_TYPES", ["Logic", "Inputs", "Outputs", "Recipients", "Thresholds", "Security", "Storage", "Dependencies", "Platform", "Other"])
+CHANGE_STAGES = getattr(app_schema, "CHANGE_STAGES", ["Proposed", "DEV", "UAT", "PROD", "Post-implementation review", "Emergency fix", "Closed"])
 CONTROL_AREAS = getattr(app_schema, "CONTROL_AREAS", ["Ownership & Accountability", "Inventory & Classification", "Data Inputs & Lineage", "Data Validation", "Change Management", "Access Control", "Operational Resilience", "Reconciliation & Controls", "Issue Management", "Decommissioning"])
 CONTROLLED_STORAGE_TYPES = getattr(app_schema, "CONTROLLED_STORAGE_TYPES", ["Controlled SharePoint", "Controlled Network Drive", "Document Management System", "Code Repository", "Database", "Other"])
 DIRECTORY_ROLES = getattr(app_schema, "DIRECTORY_ROLES", getattr(app_schema, "ROLES", []))
@@ -46,6 +47,11 @@ DOCUMENT_TYPES = getattr(app_schema, "DOCUMENT_TYPES", [])
 FINDING_SEVERITIES = getattr(app_schema, "FINDING_SEVERITIES", ["Low", "Medium", "High", "Critical"])
 FREQUENCIES = getattr(app_schema, "FREQUENCIES", ["Daily", "Weekly", "Monthly", "Quarterly", "Ad hoc", "Event-driven"])
 INCIDENT_STATUSES = getattr(app_schema, "INCIDENT_STATUSES", ["Open", "Contained", "RCA In Progress", "Remediation In Progress", "Closed"])
+INCIDENT_TYPES = getattr(app_schema, "INCIDENT_TYPES", ["Data error", "Calculation / logic error", "Timing delay", "Access / security", "Availability / outage", "Distribution error", "Control failure", "Near miss", "Other"])
+INCIDENT_SEVERITIES = getattr(app_schema, "INCIDENT_SEVERITIES", ["Low", "Medium", "High", "Critical"])
+ROOT_CAUSE_CATEGORIES = getattr(app_schema, "ROOT_CAUSE_CATEGORIES", ["Data source", "Logic / formula", "Manual process", "Access / permissions", "Dependency / upstream", "Storage / platform", "Documentation / procedure", "SPOF / resourcing", "Other"])
+DATA_CLASSIFICATIONS = getattr(app_schema, "DATA_CLASSIFICATIONS", ["Public", "Internal", "Confidential", "Restricted", "PII / personal data", "Regulatory confidential"])
+MIGRATION_STATUSES = getattr(app_schema, "MIGRATION_STATUSES", ["Not assessed", "Candidate", "In progress", "Migrated", "Decommissioned", "Not applicable"])
 LEGAL_ENTITIES = getattr(app_schema, "LEGAL_ENTITIES", ["Eurobank S.A.", "Eurobank Holdings", "Eurobank Cyprus", "Eurobank Bulgaria", "Eurobank Private Bank Luxembourg", "Other"])
 LEVELS_OF_AUTOMATION = getattr(app_schema, "LEVELS_OF_AUTOMATION", ["Manual", "Semi-automated", "Automated", "Scheduled automated", "Other"])
 LIFECYCLE_STATUSES = getattr(app_schema, "LIFECYCLE_STATUSES", [])
@@ -1392,7 +1398,22 @@ def page_register() -> None:
         spof = st.radio("SPOF indicator", ["No", "Yes"], horizontal=True)
         mapping_na_justification = st.text_area("Not Applicable justification", help="Required if any mapping field is 'Not Applicable'.")
         lifecycle_status = st.selectbox("Initial lifecycle status", ["Draft", "Submitted", "Registered"], index=2)
-        next_review_date = st.date_input("Next Risk Assessment / review date", value=date.today() + timedelta(days=90))
+        cdate1, cdate2, cdate3 = st.columns(3)
+        registration_date = cdate1.date_input("Registration date", value=date.today())
+        go_live_date = cdate2.date_input("Go-live / BAU use date", value=date.today())
+        next_review_date = cdate3.date_input("Next Risk Assessment / review date", value=date.today() + timedelta(days=90))
+        st.subheader("Inventory completeness, evidence and migration summary")
+        ic1, ic2, ic3 = st.columns(3)
+        four_eye_review_required = ic1.selectbox("Four-eye review required?", ["No", "Yes"], index=0)
+        high_criticality_evidence_pack_required = ic2.selectbox("High-criticality Evidence Pack required?", ["No", "Yes"], index=1 if any(v == "Yes" for v in [supports_material_report, supports_material_kri, supports_material_model]) else 0)
+        material_mapping_confidence = ic3.selectbox("Material mapping confidence", ["Not Assessed", "Low", "Medium", "High"], index=0)
+        ev1, ev2 = st.columns(2)
+        evidence_pack_location = ev1.text_input("Evidence Pack location / index link")
+        library_controls_link = ev2.text_input("Library of Controls attachment/link")
+        gap_required = st.selectbox("Documentation gap assessment required?", ["No", "Yes"], index=1 if onboarding_type == "Legacy EUC" else 0)
+        documentation_gaps_summary = st.text_area("Documentation gaps summary")
+        migration_status = st.selectbox("Migration status", MIGRATION_STATUSES, index=0)
+        migration_notes = st.text_area("Migration notes")
         submitted = st.form_submit_button("Register EUC")
 
     if submitted:
@@ -1436,6 +1457,23 @@ def page_register() -> None:
                     "lifecycle_status": lifecycle_status,
                     "overall_status": lifecycle_status,
                     "next_review_date": next_review_date.isoformat(),
+                    "registration_date": registration_date.isoformat(),
+                    "go_live_date": go_live_date.isoformat(),
+                    "materiality_criterion_1": supports_material_report,
+                    "materiality_criterion_2": supports_material_kri,
+                    "materiality_criterion_3": supports_material_model,
+                    "material_report_mapping": supports_material_report,
+                    "material_kri_mapping": supports_material_kri,
+                    "material_model_mapping": supports_material_model,
+                    "evidence_pack_location": evidence_pack_location,
+                    "library_controls_link": library_controls_link,
+                    "four_eye_review_required": four_eye_review_required,
+                    "high_criticality_evidence_pack_required": high_criticality_evidence_pack_required,
+                    "documentation_gap_assessment_required": gap_required,
+                    "documentation_gaps_summary": documentation_gaps_summary,
+                    "material_mapping_confidence": material_mapping_confidence,
+                    "migration_status": migration_status,
+                    "migration_notes": migration_notes,
                     "mapping_na_justification": mapping_na_justification,
                 },
                 username,
@@ -1709,15 +1747,50 @@ def _component_asset_form(prefix: str, euc: dict[str, Any], component: dict[str,
     level_of_automation = reference_selectbox("level_of_automation", "Level of Automation", LEVELS_OF_AUTOMATION, component.get("level_of_automation"), key=f"{prefix}_automation")
     backup_recovery_arrangements = c12.text_input("Backup / Recovery Arrangements", value=component.get("backup_recovery_arrangements") or "", key=f"{prefix}_backup")
     spof_risk = c13.selectbox("Single Point of Failure risk", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("spof_risk") or "No"), key=f"{prefix}_spof")
+    c13a, c13b, c13c = st.columns(3)
+    required_input_availability_time = c13a.text_input("Required input availability time", value=component.get("required_input_availability_time") or "", key=f"{prefix}_input_avail")
+    expected_run_duration = c13b.text_input("Expected run duration", value=component.get("expected_run_duration") or "", key=f"{prefix}_run_duration")
+    timeliness_monitoring_performed = c13c.selectbox("Timeliness monitoring performed?", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("timeliness_monitoring_performed") or "No"), key=f"{prefix}_timeliness_monitoring")
+    c13d, c13e, c13f = st.columns(3)
+    fallback_bcp_steps_link = c13d.text_input("Fallback / BCP steps link", value=component.get("fallback_bcp_steps_link") or "", key=f"{prefix}_bcp_link")
+    asset_deputy_cover = c13e.selectbox("Deputy cover", ["No", "Yes", "Not Applicable"], index=option_index(["No", "Yes", "Not Applicable"], component.get("asset_deputy_cover") or "No"), key=f"{prefix}_asset_deputy")
+    key_person_dependency_mitigated = c13f.selectbox("Key-person dependency mitigated?", ["No", "Yes", "Not Applicable"], index=option_index(["No", "Yes", "Not Applicable"], component.get("key_person_dependency_mitigated") or "No"), key=f"{prefix}_key_person")
+    restore_default = pd.to_datetime(component.get("asset_last_restore_test_date"), errors="coerce")
+    asset_last_restore_test_date = st.date_input("Last restore test date", value=(restore_default.date() if pd.notna(restore_default) else date.today()), key=f"{prefix}_asset_restore")
 
-    st.markdown("#### 7. Ownership, criticality and review")
+    st.markdown("#### 7. Third-party, support, security and versioning")
+    c3p1, c3p2, c3p3 = st.columns(3)
+    cots_third_party_component = c3p1.selectbox("COTS / Third-Party Component?", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("cots_third_party_component") or "No"), key=f"{prefix}_cots_asset")
+    vendor_tool_name = c3p2.text_input("Vendor / tool name", value=component.get("vendor_tool_name") or "", key=f"{prefix}_vendor")
+    asset_support_contract_sla = c3p3.selectbox("Support contract or SLA?", ["No", "Yes", "Not Applicable"], index=option_index(["No", "Yes", "Not Applicable"], component.get("asset_support_contract_sla") or component.get("legacy_support_contract_sla") or "Not Applicable"), key=f"{prefix}_asset_sla")
+    c3p4, c3p5, c3p6 = st.columns(3)
+    vendor_support_status = c3p4.text_input("Vendor support status", value=component.get("vendor_support_status") or "", key=f"{prefix}_vendor_support")
+    eos_default = pd.to_datetime(component.get("end_of_support_date"), errors="coerce")
+    end_of_support_date = c3p5.date_input("End-of-support date", value=(eos_default.date() if pd.notna(eos_default) else date.today() + timedelta(days=365)), key=f"{prefix}_eos")
+    data_classification = c3p6.selectbox("Data classification", DATA_CLASSIFICATIONS, index=option_index(DATA_CLASSIFICATIONS, component.get("data_classification") or "Internal"), key=f"{prefix}_data_class")
+    c3p7, c3p8, c3p9 = st.columns(3)
+    approved_corporate_environment = c3p7.selectbox("Approved corporate-managed environment?", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("approved_corporate_environment") or "Yes"), key=f"{prefix}_corp_env")
+    personal_byod_storage_used = c3p8.selectbox("Personal/BYOD storage used?", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("personal_byod_storage_used") or "No"), key=f"{prefix}_byod")
+    external_sharing = c3p9.selectbox("External sharing?", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("external_sharing") or "No"), key=f"{prefix}_external_sharing")
+    c3p10, c3p11, c3p12 = st.columns(3)
+    version_release_identifier = c3p10.text_input("Version / release identifier", value=component.get("version_release_identifier") or "", key=f"{prefix}_version")
+    change_log_link = c3p11.text_input("Change log link", value=component.get("change_log_link") or "", key=f"{prefix}_change_log")
+    latest_release_notes_link = c3p12.text_input("Latest release notes link", value=component.get("latest_release_notes_link") or "", key=f"{prefix}_release_notes")
+    retention_evidence_location = st.text_input("Retention / evidence location", value=component.get("retention_evidence_location") or "", key=f"{prefix}_retention")
+
+    st.markdown("#### 8. Ownership, criticality, migration and review")
     c14, c15, c16, c17 = st.columns(4)
     owner_value = user_selectbox("Asset owner", component.get("owner") or euc.get("owner"), key=f"{prefix}_owner")
-    criticality = c15.selectbox("Criticality", ["Low", "Medium", "High", "Critical"], index=option_index(["Low", "Medium", "High", "Critical"], component.get("criticality") or "Medium"), key=f"{prefix}_criticality")
+    criticality = c15.selectbox("Criticality", ["Low", "Medium", "High", "Critical"], index=option_index(["Low", "Medium", "High", "Critical"], component.get("criticality") or component.get("legacy_criticality") or "Medium"), key=f"{prefix}_criticality")
     mod_default = pd.to_datetime(component.get("modification_date"), errors="coerce")
     review_default = pd.to_datetime(component.get("review_date"), errors="coerce")
     modification_date = c16.date_input("Modification Date", value=(mod_default.date() if pd.notna(mod_default) else date.today()), key=f"{prefix}_mod_date")
     review_date = c17.date_input("Review Date", value=(review_default.date() if pd.notna(review_default) else date.today() + timedelta(days=90)), key=f"{prefix}_review_date")
+    m1, m2, m3 = st.columns(3)
+    material_mapping_confidence = m1.selectbox("Material mapping confidence", ["Low", "Medium", "High", "Not Assessed"], index=option_index(["Low", "Medium", "High", "Not Assessed"], component.get("material_mapping_confidence") or "Not Assessed"), key=f"{prefix}_map_conf")
+    asset_migration_status = m2.selectbox("Asset migration status", MIGRATION_STATUSES, index=option_index(MIGRATION_STATUSES, component.get("asset_migration_status") or "Not assessed"), key=f"{prefix}_migration")
+    legacy_sensitive_data_flag = m3.selectbox("Legacy v1.0 sensitive data flag", ["No", "Yes", "Unknown"], index=option_index(["No", "Yes", "Unknown"], component.get("legacy_sensitive_data_flag") or "Unknown"), key=f"{prefix}_legacy_sensitive")
+    asset_migration_notes = st.text_area("Asset migration notes", value=component.get("asset_migration_notes") or "", key=f"{prefix}_migration_notes")
 
     return {
         "euc_id": euc["euc_id"],
@@ -1743,8 +1816,34 @@ def _component_asset_form(prefix: str, euc: dict[str, Any], component: dict[str,
         "level_of_automation": level_of_automation,
         "backup_recovery_arrangements": backup_recovery_arrangements,
         "spof_risk": spof_risk,
+        "required_input_availability_time": required_input_availability_time,
+        "expected_run_duration": expected_run_duration,
+        "timeliness_monitoring_performed": timeliness_monitoring_performed,
+        "fallback_bcp_steps_link": fallback_bcp_steps_link,
+        "asset_last_restore_test_date": asset_last_restore_test_date.isoformat(),
+        "asset_deputy_cover": asset_deputy_cover,
+        "key_person_dependency_mitigated": key_person_dependency_mitigated,
+        "cots_third_party_component": cots_third_party_component,
+        "vendor_tool_name": vendor_tool_name,
+        "asset_support_contract_sla": asset_support_contract_sla,
+        "vendor_support_status": vendor_support_status,
+        "end_of_support_date": end_of_support_date.isoformat(),
+        "approved_corporate_environment": approved_corporate_environment,
+        "personal_byod_storage_used": personal_byod_storage_used,
+        "data_classification": data_classification,
+        "external_sharing": external_sharing,
+        "version_release_identifier": version_release_identifier,
+        "change_log_link": change_log_link,
+        "latest_release_notes_link": latest_release_notes_link,
+        "retention_evidence_location": retention_evidence_location,
         "modification_date": modification_date.isoformat(),
         "review_date": review_date.isoformat(),
+        "material_mapping_confidence": material_mapping_confidence,
+        "asset_migration_status": asset_migration_status,
+        "asset_migration_notes": asset_migration_notes,
+        "legacy_sensitive_data_flag": legacy_sensitive_data_flag,
+        "legacy_criticality": criticality,
+        "legacy_support_contract_sla": asset_support_contract_sla,
     }
 
 
@@ -2126,6 +2225,80 @@ def page_checklist() -> None:
         rerun()
     st.caption("Overrides for missing mandatory artifacts should be managed through the exception workflow.")
 
+    gap_tab, review_tab = st.tabs(["Documentation gap assessment", "High-criticality independent review checklist"])
+    with gap_tab:
+        st.subheader("Documentation gaps identified during onboarding / review")
+        gaps = svc.get_documentation_gaps(euc["euc_id"], open_only=False)
+        safe_df(gaps, height=260)
+        if not svc.is_read_only(role) and (svc.can_edit_euc(role, username, euc) or role in {svc.GCC_ROLE, svc.DVU_ROLE}):
+            with st.form("create_documentation_gap"):
+                g1, g2, g3 = st.columns(3)
+                gap_area = g1.selectbox("Gap area", ["Inventory", "Risk Assessment", "Operating Procedure", "Library of Controls", "Evidence Pack", "Access", "Reconciliation", "Resilience", "Testing/UAT", "Approval", "Other"])
+                related_artifact = g2.selectbox("Related artifact", [""] + DOCUMENT_TYPES)
+                severity = g3.selectbox("Severity", FINDING_SEVERITIES, index=1)
+                gap_description = st.text_area("Gap description *")
+                owner_value = user_selectbox("Gap owner", euc.get("owner"), key="gap_owner")
+                target_date = st.date_input("Target date", value=date.today() + timedelta(days=30))
+                disposition = st.selectbox("Disposition", ["Remediation action", "Exception / risk acceptance", "Accepted risk", "Information only"])
+                if st.form_submit_button("Record documentation gap"):
+                    if not gap_description.strip():
+                        st.error("Gap description is required.")
+                    else:
+                        svc.create_documentation_gap({
+                            "euc_id": euc["euc_id"], "gap_area": gap_area, "gap_description": gap_description,
+                            "related_artifact": related_artifact, "severity": severity, "owner": owner_value,
+                            "target_date": target_date.isoformat(), "disposition": disposition, "status": "Open",
+                        }, username)
+                        st.success("Documentation gap recorded. Remediation task created when applicable.")
+                        rerun()
+            if not gaps.empty:
+                gap_map = {f"{row['gap_id']} — {row['gap_area']} — {row['status']}": int(row["gap_id"]) for _, row in gaps.iterrows()}
+                chosen_gap = st.selectbox("Update gap", list(gap_map.keys()))
+                with st.form("update_documentation_gap"):
+                    status = st.selectbox("Gap status", ["Open", "In Progress", "Closed", "Cancelled", "Accepted Risk"])
+                    comments = st.text_area("Closure / update comments")
+                    if st.form_submit_button("Update documentation gap"):
+                        svc.update_documentation_gap(gap_map[chosen_gap], status, comments, username)
+                        st.success("Documentation gap updated.")
+                        rerun()
+
+    with review_tab:
+        mandatory = svc.high_criticality_required(euc)
+        if mandatory:
+            st.warning("High-criticality Evidence Pack / Independent Review checklist is mandatory for this EUC because it materially supports BCBS 239 and has High/Very High inherent risk.")
+        else:
+            st.info("This checklist is optional unless the EUC materially supports BCBS 239 and is High/Very High inherent risk, or a governance reviewer requires it.")
+        reviews = svc.get_high_criticality_reviews(euc["euc_id"])
+        safe_df(reviews, height=260)
+        if not svc.is_read_only(role) and role in {svc.GCC_ROLE, svc.DVU_ROLE}:
+            with st.form("high_criticality_review"):
+                options = ["Not reviewed", "Satisfactory", "Gap identified", "Not applicable"]
+                overview = st.selectbox("Overview & governance", options, index=1)
+                scope = st.selectbox("Scope, purpose and BCBS/RRF linkage", options, index=1)
+                lineage = st.selectbox("Lineage & data completeness", options, index=1)
+                design = st.selectbox("Design / logic adequacy", options, index=1)
+                controls = st.selectbox("Controls & reconciliations", options, index=1)
+                testing = st.selectbox("Testing / UAT sufficiency", options, index=1)
+                security = st.selectbox("Security, RBAC/RLS and external sharing", options, index=1)
+                resilience = st.selectbox("Resilience, backup, restore and deputy cover", options, index=1)
+                evidence_index = st.selectbox("Controls-to-evidence index", options, index=1)
+                conclusion = st.text_area("Independent review conclusion")
+                outcome = st.selectbox("Overall outcome", ["Accepted", "Accepted with comments", "Returned for remediation", "Finding raised"])
+                comments = st.text_area("Comments")
+                if st.form_submit_button("Save high-criticality review"):
+                    svc.create_high_criticality_review({
+                        "euc_id": euc["euc_id"], "mandatory_flag": int(mandatory),
+                        "overview_governance": overview, "scope_purpose": scope, "lineage_data": lineage,
+                        "design_logic": design, "controls_reconciliations": controls, "testing_sufficiency": testing,
+                        "security_access": security, "resilience": resilience,
+                        "independent_review_conclusion": conclusion, "controls_evidence_index": evidence_index,
+                        "overall_outcome": outcome, "comments": comments,
+                    }, username)
+                    st.success("High-criticality independent review checklist saved.")
+                    rerun()
+        elif not svc.is_read_only(role):
+            st.info("High-criticality review completion is restricted to GCC and Data Validation users.")
+
 
 def page_tasks() -> None:
     st.title("Tasks & Remediation")
@@ -2239,8 +2412,8 @@ def page_gcc() -> None:
     data = svc.gcc_monitoring_dataset()
     if not data["risk_distribution"].empty:
         st.plotly_chart(px.bar(data["risk_distribution"], x="residual_risk", y="count", title="Portfolio risk distribution"), use_container_width=True)
-    tabs = st.tabs(["Missing documentation", "Overdue tasks", "Open findings", "Open exceptions", "Open incidents", "High / Very High", "SPOF", "Industrialization", "Decommissioning"])
-    for tab, key in zip(tabs, ["missing_documentation", "overdue_tasks", "open_findings", "open_exceptions", "open_incidents", "high_risk", "spof", "industrialization", "decommissioning"]):
+    tabs = st.tabs(["Missing documentation", "Overdue tasks", "Open findings", "Open exceptions", "Open incidents", "High / Very High", "SPOF", "Industrialization", "Decommissioning", "Documentation gaps", "High-criticality reviews", "Industrialization scoring"])
+    for tab, key in zip(tabs, ["missing_documentation", "overdue_tasks", "open_findings", "open_exceptions", "open_incidents", "high_risk", "spof", "industrialization", "decommissioning", "documentation_gaps", "high_criticality_reviews", "industrialization_assessments"]):
         with tab:
             safe_df(data[key], height=350)
 
@@ -2296,33 +2469,62 @@ def page_exceptions() -> None:
     st.title("Exceptions")
     username, role = current_user()
     exceptions = svc.get_exceptions(open_only=False)
-    safe_df(exceptions, height=340)
+    safe_df(exceptions, height=380)
     if svc.is_read_only(role):
         return
     tabs = st.tabs(["Create exception", "Approve / reject"])
     with tabs[0]:
         euc = euc_selector("Exception EUC")
-        if euc and (svc.can_edit_euc(role, username, euc) or role in {svc.GCC_ROLE, svc.ADMIN_ROLE}):
+        if euc and (svc.can_edit_euc(role, username, euc) or role in {svc.GCC_ROLE, svc.DVU_ROLE}):
             with st.form("create_exception"):
-                gap = st.text_area("Control gap *")
+                st.markdown("#### Exception record")
+                gap = st.text_area("Control gap / specific requirement not met *")
                 root = st.text_area("Root cause")
-                comp = st.text_area("Compensating controls")
-                residual = st.selectbox("Residual risk", RISK_LEVELS, index=option_index(RISK_LEVELS, euc.get("residual_risk") if euc else "Medium"))
-                remediation = st.text_area("Remediation plan")
-                target = st.date_input("Target date", value=date.today() + timedelta(days=60))
-                expiry = st.date_input("Expiry date", value=date.today() + timedelta(days=90))
+                comp = st.text_area("Compensating controls / interim mitigations")
+                residual = st.selectbox("Residual risk evidenced by Risk Assessment", RISK_LEVELS, index=option_index(RISK_LEVELS, euc.get("residual_risk") if euc else "Medium"))
+                exception_owner = user_selectbox("Exception owner", euc.get("owner"), key="exception_owner")
+                remediation = st.text_area("Remediation / industrialization / decommissioning plan")
+                milestones = st.text_area("Milestones and interim deliverables")
+                monitoring = st.text_area("Monitoring approach")
+                c1, c2, c3 = st.columns(3)
+                target = c1.date_input("Target remediation date", value=date.today() + timedelta(days=60))
+                expiry = c2.date_input("Exception expiry date", value=date.today() + timedelta(days=90))
+                periodic_review = c3.date_input("Periodic exception review date", value=date.today() + timedelta(days=30))
+                st.markdown("#### Approval and escalation")
+                approval_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=option_index(APPROVAL_STATUSES, "Pending"))
+                a1, a2, a3 = st.columns(3)
+                unit_head_approval = a1.selectbox("Unit Head approval required/evidenced?", ["No", "Yes", "Not Applicable"], index=1 if residual == "High" else 0)
+                senior_management_approval = a2.selectbox("Senior Management approval required/evidenced?", ["No", "Yes", "Not Applicable"], index=1 if residual == "Very High" else 0)
+                steering = a3.selectbox("BCBS 239 Steering / governance reporting required?", ["No", "Yes", "Not Applicable"], index=1 if residual == "Very High" else 0)
+                escalation_required = st.selectbox("Escalation required?", ["No", "Yes"], index=1 if residual == "Very High" else 0)
+                e1, e2 = st.columns(2)
+                escalation_to = e1.text_input("Escalation to", value="BCBS 239 Steering Committee" if residual == "Very High" else "")
+                escalation_date = e2.date_input("Escalation date", value=date.today())
+                renewal_status = st.selectbox("Renewal status", ["Not Requested", "Requested", "Approved", "Rejected", "Not Applicable"])
+                renewal_reason = st.text_area("Renewal request reason / evidence of remediation progress")
                 if st.form_submit_button("Create exception"):
                     if not gap:
                         st.error("Control gap is required.")
                     else:
-                        svc.create_exception({"euc_id": euc["euc_id"], "control_gap": gap, "root_cause": root, "compensating_controls": comp, "residual_risk": residual, "remediation_plan": remediation, "target_date": target.isoformat(), "expiry_date": expiry.isoformat(), "approval_status": "Pending", "status": "Open"}, username)
-                        st.success("Exception created and approval task assigned.")
+                        svc.create_exception({
+                            "euc_id": euc["euc_id"], "control_gap": gap, "root_cause": root,
+                            "compensating_controls": comp, "residual_risk": residual, "remediation_plan": remediation,
+                            "target_date": target.isoformat(), "expiry_date": expiry.isoformat(), "approval_status": approval_status,
+                            "status": "Open", "exception_owner": exception_owner, "milestones": milestones,
+                            "monitoring_approach": monitoring, "periodic_review_date": periodic_review.isoformat(),
+                            "renewal_status": renewal_status, "renewal_request_reason": renewal_reason,
+                            "escalation_required": escalation_required, "escalation_to": escalation_to,
+                            "escalation_date": escalation_date.isoformat() if escalation_required == "Yes" else None,
+                            "senior_management_approval": senior_management_approval,
+                            "bcbs239_steering_reported": steering, "unit_head_approval": unit_head_approval,
+                        }, username)
+                        st.success("Exception created and approval/escalation task assigned.")
                         rerun()
         else:
             st.info("Select an EUC for which you have exception creation access.")
     with tabs[1]:
         if not svc.can_approve(role):
-            st.info("Exception approval is restricted to Approver / Head of Unit and Administrator roles.")
+            st.info("Exception approval is restricted to Approver / Head of Unit.")
         elif exceptions.empty:
             st.info("No exceptions available.")
         else:
@@ -2338,26 +2540,71 @@ def page_exceptions() -> None:
 def page_incidents() -> None:
     st.title("Incidents & Near Misses")
     username, role = current_user()
-    safe_df(svc.get_incidents(open_only=False), height=340)
+    safe_df(svc.get_incidents(open_only=False), height=420)
     if svc.is_read_only(role):
         return
     euc = euc_selector("Incident EUC")
     if not euc:
         return
-    if not svc.can_edit_euc(role, username, euc) and role not in {svc.GCC_ROLE, svc.ADMIN_ROLE}:
+    if not svc.can_edit_euc(role, username, euc) and role not in {svc.GCC_ROLE, svc.DVU_ROLE}:
         st.info("Incident creation is available to EUC owners/delegates and governance roles.")
         return
     with st.form("create_incident"):
+        st.markdown("#### Incident identification")
+        c1, c2, c3, c4 = st.columns(4)
+        incident_date = c1.date_input("Incident date", value=date.today())
+        detection_date = c2.date_input("Detection date", value=date.today())
+        reporting_period_run = c3.text_input("Reporting period / run")
+        reported_by = c4.text_input("Reported by", value=username)
+        incident_type = st.selectbox("Incident type", INCIDENT_TYPES)
+        incident_description = st.text_area("Incident description")
         affected = st.text_area("Affected outputs")
-        incident_date = st.date_input("Incident date", value=date.today())
         impact = st.text_area("Impact summary")
-        containment = st.text_input("Containment status")
-        correction = st.text_input("Correction status")
-        rca = st.text_input("RCA status")
+        impact_description = st.text_area("Impact description / downstream impact")
+        c5, c6, c7 = st.columns(3)
+        severity = c5.selectbox("Severity", INCIDENT_SEVERITIES, index=1)
+        cacrt_dimension = c6.selectbox("CACRT dimension", CACRT_DIMENSIONS)
+        linked_residual = c7.selectbox("Linked residual risk level", RISK_LEVELS, index=option_index(RISK_LEVELS, euc.get("residual_risk") or "Medium"))
+        st.markdown("#### Containment, RCA and actions")
+        root_category = st.selectbox("Root cause category", ROOT_CAUSE_CATEGORIES)
+        root_description = st.text_area("Root cause description")
+        immediate = st.text_area("Immediate action taken / containment")
+        corrective = st.text_area("Corrective action")
+        preventive = st.text_area("Preventive action")
         remediation = st.text_area("Remediation actions")
-        status = st.selectbox("Status", INCIDENT_STATUSES)
+        c8, c9, c10, c11 = st.columns(4)
+        action_owner = c8.text_input("Action owner", value=euc.get("owner") or username)
+        target_resolution = c9.date_input("Target resolution date", value=date.today() + timedelta(days=30))
+        resolution_date = c10.date_input("Resolution date", value=date.today())
+        status = c11.selectbox("Status", INCIDENT_STATUSES)
+        st.markdown("#### Escalation / regulatory impact")
+        i1, i2, i3, i4 = st.columns(4)
+        regulatory_impact = i1.selectbox("Regulatory impact?", ["No", "Yes", "Unknown"])
+        escalated = i2.selectbox("Escalated?", ["No", "Yes"])
+        escalation_date = i3.date_input("Escalation date", value=date.today())
+        escalation_to = i4.text_input("Escalation to")
+        restatement = st.selectbox("Restatement / re-issue required?", ["No", "Yes", "Under assessment"])
+        exception_raised = st.selectbox("Exception raised?", ["No", "Yes", "Under assessment"])
+        reference_links = st.text_area("Reference links / evidence")
+        comments = st.text_area("Comments")
         if st.form_submit_button("Create incident"):
-            svc.create_incident({"euc_id": euc["euc_id"], "affected_outputs": affected, "incident_date": incident_date.isoformat(), "impact_summary": impact, "containment_status": containment, "correction_status": correction, "rca_status": rca, "remediation_actions": remediation, "status": status}, username)
+            svc.create_incident({
+                "euc_id": euc["euc_id"], "affected_outputs": affected, "incident_date": incident_date.isoformat(),
+                "detection_date": detection_date.isoformat(), "reporting_period_run": reporting_period_run,
+                "reported_by": reported_by, "incident_type": incident_type, "incident_description": incident_description,
+                "impact_summary": impact, "impact_description": impact_description, "severity": severity,
+                "cacrt_dimension": cacrt_dimension, "root_cause_category": root_category,
+                "root_cause_description": root_description, "containment_status": immediate,
+                "immediate_action_taken": immediate, "correction_status": corrective, "corrective_action": corrective,
+                "rca_status": "RCA recorded" if root_description else "RCA pending", "preventive_action": preventive,
+                "remediation_actions": remediation, "action_owner": action_owner,
+                "target_resolution_date": target_resolution.isoformat(), "resolution_date": resolution_date.isoformat() if status == "Closed" else None,
+                "linked_residual_risk_level": linked_residual, "regulatory_impact": regulatory_impact,
+                "escalated": escalated, "escalation_date": escalation_date.isoformat() if escalated == "Yes" else None,
+                "escalation_to": escalation_to, "restatement_reissue_required": restatement,
+                "exception_raised": exception_raised, "reference_links_evidence": reference_links,
+                "comments": comments, "status": status,
+            }, username)
             st.success("Incident recorded. Reassessment and documentation refresh tasks were generated.")
             rerun()
 
@@ -2365,27 +2612,60 @@ def page_incidents() -> None:
 def page_material_changes() -> None:
     st.title("Material Changes & Reassessments")
     username, role = current_user()
-    safe_df(svc.get_material_changes(), height=330)
+    safe_df(svc.get_material_changes(), height=420)
     if svc.is_read_only(role):
         return
     euc = euc_selector("Changed EUC")
     if not euc:
         return
-    if not svc.can_edit_euc(role, username, euc) and role not in {svc.GCC_ROLE, svc.ADMIN_ROLE}:
+    if not svc.can_edit_euc(role, username, euc) and role not in {svc.GCC_ROLE, svc.DVU_ROLE}:
         st.info("Material change creation is available to EUC owners/delegates and governance roles.")
         return
     with st.form("material_change"):
         change_type = st.selectbox("Change type", CHANGE_TYPES)
         description = st.text_area("Description *")
+        rationale = st.text_area("Change request and rationale")
         impact = st.text_area("Impact assessment")
-        reassessment = st.checkbox("Reassessment required", value=True)
-        doc_refresh = st.checkbox("Documentation refresh required", value=True)
-        status = st.selectbox("Status", ["Open", "In Assessment", "Awaiting Reassessment", "Closed"])
+        c1, c2, c3 = st.columns(3)
+        stage = c1.selectbox("DEV / UAT / PROD stage", CHANGE_STAGES)
+        effective_date = c2.date_input("Effective date", value=date.today())
+        communication_date = c3.date_input("Stakeholder communication date", value=date.today())
+        cutover_plan = st.text_area("Cut-over plan")
+        rollback = st.text_area("Rollback approach")
+        stakeholder_comm = st.text_area("Stakeholder communication / impacted recipients")
+        evidence_pack_detail = st.text_area("Evidence Pack update detail")
+        st.markdown("#### Required follow-up")
+        c4, c5, c6, c7 = st.columns(4)
+        reassessment = c4.checkbox("Risk reassessment required", value=True)
+        doc_refresh = c5.checkbox("Documentation refresh required", value=True)
+        library_update = c6.checkbox("Library of Controls attachment refresh required", value=True)
+        approval_required = c7.checkbox("Approval/sign-off required", value=euc.get("inherent_risk") in {"High", "Very High"})
+        c8, c9, c10, c11 = st.columns(4)
+        testing_required = c8.checkbox("Testing required", value=euc.get("inherent_risk") in {"High", "Very High"})
+        uat_required = c9.checkbox("UAT/peer check required", value=euc.get("inherent_risk") in {"High", "Very High"})
+        emergency_change = c10.checkbox("Emergency change")
+        retro_uat_required = c11.checkbox("Retro-run UAT/approval required", value=False)
+        c12, c13, c14 = st.columns(3)
+        approval_status = c12.selectbox("Approval status", APPROVAL_STATUSES, index=0)
+        approved_by = c13.text_input("Approved by")
+        approval_date = c14.date_input("Approval date", value=date.today())
+        status = st.selectbox("Status", ["Open", "In Assessment", "Awaiting Reassessment", "Pending Approval", "Implemented", "Closed"])
         if st.form_submit_button("Record material change"):
             if not description:
                 st.error("Description is required.")
             else:
-                svc.create_material_change({"euc_id": euc["euc_id"], "change_type": change_type, "description": description, "impact_assessment": impact, "reassessment_required": reassessment, "documentation_refresh_required": doc_refresh, "status": status}, username)
+                svc.create_material_change({
+                    "euc_id": euc["euc_id"], "change_type": change_type, "description": description,
+                    "change_request_rationale": rationale, "impact_assessment": impact, "cutover_plan": cutover_plan,
+                    "rollback_approach": rollback, "change_stage": stage, "testing_required": testing_required,
+                    "uat_required": uat_required, "approval_required": approval_required, "approval_status": approval_status,
+                    "approved_by": approved_by, "approval_date": approval_date.isoformat() if approval_status == "Approved" else None,
+                    "reassessment_required": reassessment, "documentation_refresh_required": doc_refresh,
+                    "library_controls_update_required": library_update, "evidence_pack_update_detail": evidence_pack_detail,
+                    "stakeholder_communication": stakeholder_comm, "communication_date": communication_date.isoformat(),
+                    "effective_date": effective_date.isoformat(), "emergency_change": emergency_change,
+                    "retro_uat_required": retro_uat_required, "status": status,
+                }, username)
                 st.success("Material change recorded and follow-up tasks generated as applicable.")
                 rerun()
 
@@ -2405,7 +2685,9 @@ def page_lifecycle() -> None:
     if not svc.can_edit_euc(role, username, euc) and role not in {svc.GCC_ROLE, svc.ADMIN_ROLE}:
         st.info("Lifecycle changes are available to EUC owners/delegates and governance roles.")
         return
-    tabs = st.tabs(["Mark industrialization candidate", "Controlled decommissioning"])
+    st.subheader("Industrialization assessment history")
+    safe_df(svc.get_industrialization_assessments(euc["euc_id"]), height=260)
+    tabs = st.tabs(["Mark industrialization candidate", "Industrialization scoring / decision", "Controlled decommissioning"])
     with tabs[0]:
         with st.form("industrialization"):
             rationale = st.text_area("Industrialization rationale", value=euc.get("industrialization_rationale") or "")
@@ -2419,6 +2701,32 @@ def page_lifecycle() -> None:
                 st.success("EUC marked as industrialization candidate.")
                 rerun()
     with tabs[1]:
+        st.caption("Policy scoring: BCBS 239 criticality +5; residual risk pressure +4; operational risk/SPOF/complexity +4; frequency/volume +3; strategic fit +2. Scores ≥10 fast-track, 7–9 prioritized, ≤6 monitored.")
+        with st.form("industrialization_scoring"):
+            bcbs_score = st.checkbox("Materially supports BCBS 239 output (+5)", value=any(str(euc.get(c) or "").lower() == "yes" for c in ["supports_material_report", "supports_material_kri", "supports_material_model"]))
+            residual_score = st.checkbox("Sustained High/Very High residual risk or risk outside tolerance (+4)", value=euc.get("residual_risk") in {"High", "Very High"})
+            operational_score = st.checkbox("Operational risk: incidents/SPOF/complex macros/scripts/manual workaround (+4)", value=str(euc.get("spof_indicator") or "").lower() == "yes")
+            frequency_score = st.checkbox("Daily/weekly run, high volume or cross-unit recipients (+3)", value=euc.get("frequency") in {"Daily", "Weekly"})
+            strategic_score = st.checkbox("Strategic fit with modernization/data platform initiatives (+2)", value=False)
+            decision = st.selectbox("Decision", ["Monitor", "Prioritize", "Fast-track", "Reject", "Defer"])
+            decision_rationale = st.text_area("Decision rationale")
+            if st.form_submit_button("Save industrialization assessment"):
+                svc.create_industrialization_assessment(
+                    {
+                        "euc_id": euc["euc_id"],
+                        "bcbs_score": 5 if bcbs_score else 0,
+                        "residual_score": 4 if residual_score else 0,
+                        "operational_score": 4 if operational_score else 0,
+                        "frequency_volume_score": 3 if frequency_score else 0,
+                        "strategic_fit_score": 2 if strategic_score else 0,
+                        "decision": decision,
+                        "decision_rationale": decision_rationale,
+                    },
+                    username,
+                )
+                st.success("Industrialization assessment saved.")
+                rerun()
+    with tabs[2]:
         st.warning("Controlled decommissioning closes open obligations as cancelled/closed and retains final evidence records.")
         with st.form("decommission"):
             rationale = st.text_area("Decommissioning rationale", value=euc.get("decommissioning_rationale") or "")

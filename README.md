@@ -79,3 +79,20 @@ uploads/
 __pycache__/
 *.pyc
 ```
+
+## Policy-completeness update excluding structured Library of Controls
+
+This release implements the remaining policy-completeness items while keeping Library of Controls as an uploaded evidence attachment rather than a structured app module.
+
+Implemented additions:
+- Expanded EUC Application Inventory fields for registration/go-live dates, evidence-pack/library links, high-criticality flags, documentation-gap summary, materiality/mapping confidence and migration notes.
+- Expanded EUC Asset Inventory fields for COTS/vendor support, approved environment, BYOD, input availability, run duration, timeliness monitoring, fallback/BCP, restore testing, deputy cover, key-person dependency, version/release, change log, release notes, retention/evidence location, data classification, external sharing, mapping confidence and migration/legacy flags.
+- Fuller Appendix 7-style Incident Log capture, including detection date, reporting run, incident type, severity, CACRT dimension, root-cause category/description, containment, corrective/preventive actions, owner, resolution targets, regulatory impact, escalation, re-issue/restatement and evidence links.
+- Risk-based material-change workflow fields covering change rationale, cut-over, rollback, DEV/UAT/PROD stage, testing/UAT/approval requirements, Library of Controls attachment refresh, Evidence Pack update, communications, emergency change and retro-UAT.
+- Enhanced exception governance fields for milestones, monitoring approach, periodic review, renewal, escalation, Unit Head / Senior Management / BCBS 239 Steering indicators.
+- Documentation Gap Assessment workflow for legacy onboarding and review gaps, with remediation task creation.
+- High-Criticality Evidence Pack / Independent Review checklist for GCC/Data Validation review.
+- Industrialization scoring and decision record based on policy criteria.
+- Reports & KPIs additions for documentation gaps, high-criticality review coverage, and lineage completeness.
+
+Library of Controls remains a document/evidence attachment type and is not implemented as a separate structured control-register module.
