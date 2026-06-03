@@ -116,3 +116,32 @@ Library of Controls remains an uploaded attachment/evidence type rather than a s
 - Vendor/COTS fields are conditional. If an asset is not a COTS/third-party component, vendor name, support status, SLA and end-of-support date are set to not applicable / blank.
 - Vendor support status is now a controlled list: Not Applicable, Supported / Active, Supported but end-of-support announced, Extended support, Unsupported / End of support, Unknown / To be confirmed.
 - Required input availability, expected run duration and fallback/recovery procedure reference are now controlled selections instead of free text.
+
+## Imported EUC Inventory records
+
+This package includes a pre-populated SQLite database created from the uploaded workbook `1.EUC_Inventory.xlsx`.
+
+Imported counts:
+
+- EUC Application records: 410
+  - 409 records from the workbook `EUC Application Inventory` sheet
+  - 1 placeholder record `EUC.IMPORT.UNMATCHED` for asset rows without a valid parent EUC reference
+- EUC Asset / Component records: 1,268
+- Asset records linked to the unmatched placeholder: 224
+
+The import preserves the parent-child model:
+
+- Parent layer: `eucs.reference_id`
+- Child layer: `components.euc_id`
+
+The import also creates user-directory entries for imported EUC owners/reviewers using the default demo email address, so those names can be selected in the simple MVP login.
+
+To recreate the records from the embedded inventory snapshot, run:
+
+```bash
+python seed_inventory_records.py --force
+```
+
+The `--force` option removes existing EUC operational data before loading the imported inventory records. It preserves users, configuration, RACI rules, reference data and audit trail according to the application purge rules.
+
+Note: the package intentionally includes `euc_governance.db` so the records are visible immediately after deployment. If you want a clean deployment, delete `euc_governance.db` before committing/deploying and rerun `python seed_inventory_records.py --force` only when you want to reload the imported inventory records.
