@@ -3464,6 +3464,22 @@ def inventory_completeness_migration_dataset() -> pd.DataFrame:
         """
     )
 
+def asset_migration_dataset() -> pd.DataFrame:
+    """Asset-level migration and legacy conversion monitoring view for GCC/Admin."""
+    return dataframe(
+        """
+        SELECT
+            c.component_id, c.euc_id, e.reference_id, e.name AS euc_application, e.business_unit,
+            c.component_name, c.technology_type, c.controlled_storage_location, c.owner AS asset_steward,
+            c.criticality, c.material_mapping_confidence, c.asset_migration_status, c.asset_migration_notes,
+            c.legacy_sensitive_data_flag, c.legacy_criticality, c.legacy_support_contract_sla,
+            c.cots_third_party_component, c.vendor_tool_name, c.vendor_support_status, c.end_of_support_date
+        FROM components c
+        JOIN eucs e ON e.euc_id = c.euc_id
+        ORDER BY e.business_unit, e.reference_id, c.component_name
+        """
+    )
+
 def gcc_monitoring_dataset() -> dict[str, pd.DataFrame]:
     return {
         "risk_distribution": dataframe("SELECT residual_risk, COUNT(*) AS count FROM eucs GROUP BY residual_risk"),
@@ -3480,6 +3496,7 @@ def gcc_monitoring_dataset() -> dict[str, pd.DataFrame]:
         "high_criticality_reviews": get_high_criticality_reviews(),
         "industrialization_assessments": get_industrialization_assessments(),
         "inventory_completeness_migration": inventory_completeness_migration_dataset(),
+        "asset_migration": asset_migration_dataset(),
     }
 
 

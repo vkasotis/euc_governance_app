@@ -64,6 +64,40 @@ ROLES = getattr(app_schema, "ROLES", ["EUC Owner", "EUC Owner Delegate / Contrib
 TASK_STATUSES = getattr(app_schema, "TASK_STATUSES", ["Open", "In Progress", "Blocked", "Closure Requested", "Closed", "Cancelled"])
 TASK_TYPES = getattr(app_schema, "TASK_TYPES", [])
 TECHNOLOGY_TYPES = getattr(app_schema, "TECHNOLOGY_TYPES", ["Excel", "Access", "Python script", "Notebook", "Report", "SQL script", "Manual process", "Other"])
+VENDOR_SUPPORT_STATUS_OPTIONS = [
+    "Not Applicable – no external vendor / COTS",
+    "Supported / Active",
+    "Supported but end-of-support announced",
+    "Extended support",
+    "Unsupported / End of support",
+    "Unknown / To be confirmed",
+]
+INPUT_AVAILABILITY_OPTIONS = [
+    "Not time-critical",
+    "Same working day before execution",
+    "Previous working day",
+    "Two working days before execution",
+    "Specific working day/time",
+]
+RUN_DURATION_OPTIONS = [
+    "< 15 minutes",
+    "15–30 minutes",
+    "30–60 minutes",
+    "1–2 hours",
+    "2–4 hours",
+    "4–8 hours",
+    "> 8 hours",
+    "Ad hoc / variable",
+    "Unknown",
+]
+FALLBACK_RECOVERY_REFERENCE_OPTIONS = [
+    "Covered in Operating Procedure",
+    "Separate document uploaded in Evidence Pack",
+    "Not required / not time-critical",
+    "Not available – gap to remediate",
+    "Other reference",
+]
+TIME_SLOT_OPTIONS = [f"{hour:02d}:{minute:02d}" for hour in range(24) for minute in (0, 30)]
 from seed_data import seed_database
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🏦", layout="wide")
@@ -812,6 +846,45 @@ def working_day_selectbox(label: str, value: Any = None, *, key: str | None = No
         key=key,
     )
     return f"Working day {selected}"
+
+
+def _option_with_existing(options: list[str], value: Any, default: str | None = None) -> tuple[list[str], int]:
+    """Return options plus an existing stored legacy value, with the selected index."""
+    opts = list(options)
+    current = str(value or "").strip()
+    if not current:
+        current = default or (opts[0] if opts else "")
+    if current not in opts and current:
+        opts.append(current)
+    return opts, option_index(opts, current)
+
+
+def _mode_from_stored(options: list[str], value: Any, default: str) -> str:
+    """Resolve a controlled mode from a stored value that may include free-text details."""
+    current = str(value or "").strip()
+    if not current:
+        return default
+    for option in options:
+        if current == option or current.startswith(f"{option}:"):
+            return option
+    return "Specific working day/time" if "Specific working day/time" in options else ("Other reference" if "Other reference" in options else default)
+
+
+def _time_index_from_stored(value: Any, default: str = "09:00") -> int:
+    match = re.search(r"([01]?\d|2[0-3]):([0-5]\d)", str(value or ""))
+    selected = match.group(0) if match else default
+    if selected not in TIME_SLOT_OPTIONS:
+        selected = default
+    return option_index(TIME_SLOT_OPTIONS, selected)
+
+
+def _detail_without_mode(value: Any, modes: list[str]) -> str:
+    current = str(value or "").strip()
+    for mode in modes:
+        prefix = f"{mode}:"
+        if current.startswith(prefix):
+            return current[len(prefix):].strip()
+    return current if current not in modes else ""
 
 def bcbs_output_selectbox(label: str, value: str | None = None, key: str | None = None) -> str:
     """Controlled selector for primary BCBS 239 output mapping."""
@@ -1821,26 +1894,98 @@ def _component_asset_form(prefix: str, euc: dict[str, Any], component: dict[str,
     backup_recovery_arrangements = c12.text_input("Backup / Recovery Arrangements", value=component.get("backup_recovery_arrangements") or "", key=f"{prefix}_backup")
     spof_risk = c13.selectbox("Single Point of Failure risk", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("spof_risk") or "No"), key=f"{prefix}_spof")
     c13a, c13b, c13c = st.columns(3)
-    required_input_availability_time = c13a.text_input("Required input availability time", value=component.get("required_input_availability_time") or "", key=f"{prefix}_input_avail")
-    expected_run_duration = c13b.text_input("Expected run duration", value=component.get("expected_run_duration") or "", key=f"{prefix}_run_duration")
+    existing_input_availability = component.get("required_input_availability_time") or ""
+    input_availability_default = _mode_from_stored(INPUT_AVAILABILITY_OPTIONS, existing_input_availability, "Not time-critical")
+    required_input_availability_mode = c13a.selectbox(
+        "Required input availability",
+        INPUT_AVAILABILITY_OPTIONS,
+        index=option_index(INPUT_AVAILABILITY_OPTIONS, input_availability_default),
+        key=f"{prefix}_input_avail_mode",
+        help="When upstream inputs must be available so the asset can execute on time.",
+    )
+    required_input_availability_time = required_input_availability_mode
+    if required_input_availability_mode == "Specific working day/time":
+        a1, a2 = st.columns(2)
+        with a1:
+            input_avail_day = working_day_selectbox(
+                "Required input availability working day",
+                existing_input_availability,
+                key=f"{prefix}_input_avail_wd",
+            )
+        input_avail_time = a2.selectbox(
+            "Required input availability time",
+            TIME_SLOT_OPTIONS,
+            index=_time_index_from_stored(existing_input_availability, "09:00"),
+            key=f"{prefix}_input_avail_time",
+        )
+        required_input_availability_time = f"Specific working day/time: {input_avail_day}, {input_avail_time}"
+
+    run_duration_options, run_duration_index = _option_with_existing(
+        RUN_DURATION_OPTIONS,
+        component.get("expected_run_duration"),
+        "Unknown",
+    )
+    expected_run_duration = c13b.selectbox(
+        "Expected run duration",
+        run_duration_options,
+        index=run_duration_index,
+        key=f"{prefix}_run_duration",
+        help="Normal elapsed time from start to finish. Used for timeliness and cut-off monitoring.",
+    )
     timeliness_monitoring_performed = c13c.selectbox("Timeliness monitoring performed?", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("timeliness_monitoring_performed") or "No"), key=f"{prefix}_timeliness_monitoring")
     c13d, c13e, c13f = st.columns(3)
-    fallback_bcp_steps_link = c13d.text_input("Fallback / BCP steps link", value=component.get("fallback_bcp_steps_link") or "", key=f"{prefix}_bcp_link")
+    existing_fallback_reference = component.get("fallback_bcp_steps_link") or ""
+    fallback_default = _mode_from_stored(FALLBACK_RECOVERY_REFERENCE_OPTIONS, existing_fallback_reference, "Covered in Operating Procedure")
+    fallback_recovery_reference = c13d.selectbox(
+        "Fallback / recovery procedure reference",
+        FALLBACK_RECOVERY_REFERENCE_OPTIONS,
+        index=option_index(FALLBACK_RECOVERY_REFERENCE_OPTIONS, fallback_default),
+        key=f"{prefix}_fallback_reference",
+        help="Where fallback, recovery or BCP steps are documented if the asset, inputs or owner/deputy are unavailable.",
+    )
+    fallback_bcp_steps_link = fallback_recovery_reference
+    if fallback_recovery_reference in {"Separate document uploaded in Evidence Pack", "Other reference"}:
+        fallback_detail = st.text_input(
+            "Fallback / recovery reference details",
+            value=_detail_without_mode(existing_fallback_reference, FALLBACK_RECOVERY_REFERENCE_OPTIONS),
+            key=f"{prefix}_bcp_link_detail",
+            help="Paste a document path/link or describe the reference. If evidence is uploaded, identify the evidence type/location.",
+        )
+        fallback_bcp_steps_link = f"{fallback_recovery_reference}: {fallback_detail}" if fallback_detail else fallback_recovery_reference
     asset_deputy_cover = c13e.selectbox("Deputy cover", ["No", "Yes", "Not Applicable"], index=option_index(["No", "Yes", "Not Applicable"], component.get("asset_deputy_cover") or "No"), key=f"{prefix}_asset_deputy")
     key_person_dependency_mitigated = c13f.selectbox("Key-person dependency mitigated?", ["No", "Yes", "Not Applicable"], index=option_index(["No", "Yes", "Not Applicable"], component.get("key_person_dependency_mitigated") or "No"), key=f"{prefix}_key_person")
     restore_default = pd.to_datetime(component.get("asset_last_restore_test_date"), errors="coerce")
     asset_last_restore_test_date = st.date_input("Last restore test date", value=(restore_default.date() if pd.notna(restore_default) else date.today()), key=f"{prefix}_asset_restore")
 
-    st.markdown("#### 7. Third-party, support, security and versioning")
+    st.markdown("#### 7. Security, versioning and third-party support")
     c3p1, c3p2, c3p3 = st.columns(3)
     cots_third_party_component = c3p1.selectbox("COTS / Third-Party Component?", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("cots_third_party_component") or "No"), key=f"{prefix}_cots_asset")
-    vendor_tool_name = c3p2.text_input("Vendor / tool name", value=component.get("vendor_tool_name") or "", key=f"{prefix}_vendor")
-    asset_support_contract_sla = c3p3.selectbox("Support contract or SLA?", ["No", "Yes", "Not Applicable"], index=option_index(["No", "Yes", "Not Applicable"], component.get("asset_support_contract_sla") or component.get("legacy_support_contract_sla") or "Not Applicable"), key=f"{prefix}_asset_sla")
-    c3p4, c3p5, c3p6 = st.columns(3)
-    vendor_support_status = c3p4.text_input("Vendor support status", value=component.get("vendor_support_status") or "", key=f"{prefix}_vendor_support")
-    eos_default = pd.to_datetime(component.get("end_of_support_date"), errors="coerce")
-    end_of_support_date = c3p5.date_input("End-of-support date", value=(eos_default.date() if pd.notna(eos_default) else date.today() + timedelta(days=365)), key=f"{prefix}_eos")
-    data_classification = c3p6.selectbox("Data classification", DATA_CLASSIFICATIONS, index=option_index(DATA_CLASSIFICATIONS, component.get("data_classification") or "Internal"), key=f"{prefix}_data_class")
+    if cots_third_party_component == "Yes":
+        vendor_tool_name = c3p2.text_input("Vendor / tool name", value=component.get("vendor_tool_name") or "", key=f"{prefix}_vendor")
+        asset_support_contract_sla = c3p3.selectbox("Support contract or SLA?", ["No", "Yes", "Not Applicable"], index=option_index(["No", "Yes", "Not Applicable"], component.get("asset_support_contract_sla") or component.get("legacy_support_contract_sla") or "Not Applicable"), key=f"{prefix}_asset_sla")
+        c3p4, c3p5, c3p6 = st.columns(3)
+        vendor_support_status = c3p4.selectbox(
+            "Vendor support status",
+            VENDOR_SUPPORT_STATUS_OPTIONS,
+            index=option_index(VENDOR_SUPPORT_STATUS_OPTIONS, component.get("vendor_support_status") or "Unknown / To be confirmed"),
+            key=f"{prefix}_vendor_support",
+        )
+        eos_default = pd.to_datetime(component.get("end_of_support_date"), errors="coerce")
+        eos_known_default = bool(vendor_tool_name.strip()) and pd.notna(eos_default)
+        end_of_support_known = c3p5.checkbox("End-of-support date known", value=eos_known_default, key=f"{prefix}_eos_known")
+        if end_of_support_known and vendor_tool_name.strip():
+            end_of_support_date_value = c3p5.date_input("End-of-support date", value=(eos_default.date() if pd.notna(eos_default) else date.today() + timedelta(days=365)), key=f"{prefix}_eos")
+            end_of_support_date = end_of_support_date_value.isoformat()
+        else:
+            end_of_support_date = ""
+            c3p5.caption("Leave blank if there is no vendor or the end-of-support date is not known.")
+        data_classification = c3p6.selectbox("Data classification", DATA_CLASSIFICATIONS, index=option_index(DATA_CLASSIFICATIONS, component.get("data_classification") or "Internal"), key=f"{prefix}_data_class")
+    else:
+        vendor_tool_name = ""
+        asset_support_contract_sla = "Not Applicable"
+        vendor_support_status = "Not Applicable – no external vendor / COTS"
+        end_of_support_date = ""
+        data_classification = c3p3.selectbox("Data classification", DATA_CLASSIFICATIONS, index=option_index(DATA_CLASSIFICATIONS, component.get("data_classification") or "Internal"), key=f"{prefix}_data_class")
     c3p7, c3p8, c3p9 = st.columns(3)
     approved_corporate_environment = c3p7.selectbox("Approved corporate-managed environment?", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("approved_corporate_environment") or "Yes"), key=f"{prefix}_corp_env")
     personal_byod_storage_used = c3p8.selectbox("Personal/BYOD storage used?", ["No", "Yes"], index=option_index(["No", "Yes"], component.get("personal_byod_storage_used") or "No"), key=f"{prefix}_byod")
@@ -1851,19 +1996,19 @@ def _component_asset_form(prefix: str, euc: dict[str, Any], component: dict[str,
     latest_release_notes_link = c3p12.text_input("Latest release notes link", value=component.get("latest_release_notes_link") or "", key=f"{prefix}_release_notes")
     retention_evidence_location = st.text_input("Retention / evidence location", value=component.get("retention_evidence_location") or "", key=f"{prefix}_retention")
 
-    st.markdown("#### 8. Ownership, criticality, migration and review")
+    st.markdown("#### 8. Asset review and criticality")
+    st.caption("Migration and legacy conversion metadata is maintained by GCC/Admin monitoring, not in the normal asset entry form.")
     c14, c15, c16, c17 = st.columns(4)
-    owner_value = user_selectbox("Asset owner", component.get("owner") or euc.get("owner"), key=f"{prefix}_owner")
-    criticality = c15.selectbox("Criticality", ["Low", "Medium", "High", "Critical"], index=option_index(["Low", "Medium", "High", "Critical"], component.get("criticality") or component.get("legacy_criticality") or "Medium"), key=f"{prefix}_criticality")
+    owner_value = user_selectbox("Asset steward / technical contact", component.get("owner") or euc.get("owner"), key=f"{prefix}_owner")
+    criticality = c15.selectbox("Asset criticality", ["Low", "Medium", "High", "Critical"], index=option_index(["Low", "Medium", "High", "Critical"], component.get("criticality") or component.get("legacy_criticality") or "Medium"), key=f"{prefix}_criticality")
     mod_default = pd.to_datetime(component.get("modification_date"), errors="coerce")
     review_default = pd.to_datetime(component.get("review_date"), errors="coerce")
-    modification_date = c16.date_input("Modification Date", value=(mod_default.date() if pd.notna(mod_default) else date.today()), key=f"{prefix}_mod_date")
-    review_date = c17.date_input("Review Date", value=(review_default.date() if pd.notna(review_default) else date.today() + timedelta(days=90)), key=f"{prefix}_review_date")
-    m1, m2, m3 = st.columns(3)
-    material_mapping_confidence = m1.selectbox("Material mapping confidence", ["Low", "Medium", "High", "Not Assessed"], index=option_index(["Low", "Medium", "High", "Not Assessed"], component.get("material_mapping_confidence") or "Not Assessed"), key=f"{prefix}_map_conf")
-    asset_migration_status = m2.selectbox("Asset migration status", MIGRATION_STATUSES, index=option_index(MIGRATION_STATUSES, component.get("asset_migration_status") or "Not assessed"), key=f"{prefix}_migration")
-    legacy_sensitive_data_flag = m3.selectbox("Legacy v1.0 sensitive data flag", ["No", "Yes", "Unknown"], index=option_index(["No", "Yes", "Unknown"], component.get("legacy_sensitive_data_flag") or "Unknown"), key=f"{prefix}_legacy_sensitive")
-    asset_migration_notes = st.text_area("Asset migration notes", value=component.get("asset_migration_notes") or "", key=f"{prefix}_migration_notes")
+    modification_date = c16.date_input("Last modification date", value=(mod_default.date() if pd.notna(mod_default) else date.today()), key=f"{prefix}_mod_date")
+    review_date = c17.date_input("Next asset review date", value=(review_default.date() if pd.notna(review_default) else date.today() + timedelta(days=90)), key=f"{prefix}_review_date")
+    material_mapping_confidence = component.get("material_mapping_confidence") or "Not Assessed"
+    asset_migration_status = component.get("asset_migration_status") or "Not assessed"
+    legacy_sensitive_data_flag = component.get("legacy_sensitive_data_flag") or ""
+    asset_migration_notes = component.get("asset_migration_notes") or ""
 
     return {
         "euc_id": euc["euc_id"],
@@ -1900,7 +2045,7 @@ def _component_asset_form(prefix: str, euc: dict[str, Any], component: dict[str,
         "vendor_tool_name": vendor_tool_name,
         "asset_support_contract_sla": asset_support_contract_sla,
         "vendor_support_status": vendor_support_status,
-        "end_of_support_date": end_of_support_date.isoformat(),
+        "end_of_support_date": end_of_support_date,
         "approved_corporate_environment": approved_corporate_environment,
         "personal_byod_storage_used": personal_byod_storage_used,
         "data_classification": data_classification,
@@ -2542,8 +2687,8 @@ def page_gcc() -> None:
     data = svc.gcc_monitoring_dataset()
     if not data["risk_distribution"].empty:
         st.plotly_chart(px.bar(data["risk_distribution"], x="residual_risk", y="count", title="Portfolio risk distribution"), use_container_width=True)
-    tabs = st.tabs(["Missing documentation", "Overdue tasks", "Open findings", "Open exceptions", "Open incidents", "High / Very High", "SPOF", "Industrialization", "Decommissioning", "Documentation gaps", "High-criticality reviews", "Industrialization scoring", "Inventory completeness / migration"])
-    for tab, key in zip(tabs, ["missing_documentation", "overdue_tasks", "open_findings", "open_exceptions", "open_incidents", "high_risk", "spof", "industrialization", "decommissioning", "documentation_gaps", "high_criticality_reviews", "industrialization_assessments", "inventory_completeness_migration"]):
+    tabs = st.tabs(["Missing documentation", "Overdue tasks", "Open findings", "Open exceptions", "Open incidents", "High / Very High", "SPOF", "Industrialization", "Decommissioning", "Documentation gaps", "High-criticality reviews", "Industrialization scoring", "Inventory completeness / migration", "Asset migration"])
+    for tab, key in zip(tabs, ["missing_documentation", "overdue_tasks", "open_findings", "open_exceptions", "open_incidents", "high_risk", "spof", "industrialization", "decommissioning", "documentation_gaps", "high_criticality_reviews", "industrialization_assessments", "inventory_completeness_migration", "asset_migration"]):
         with tab:
             safe_df(data[key], height=350)
 
@@ -3218,6 +3363,62 @@ def page_admin() -> None:
                         })
                         svc.update_euc(int(selected_euc["euc_id"]), payload, username)
                         st.success("Inventory completeness / migration metadata updated.")
+                        rerun()
+
+        st.divider()
+        st.subheader("Asset migration / legacy conversion metadata")
+        st.caption("Asset migration and legacy conversion flags are maintained here rather than in the normal EUC Owner asset-entry form.")
+        asset_migration_df = svc.asset_migration_dataset()
+        safe_df(asset_migration_df, height=360)
+        csv_download(asset_migration_df, "asset_migration_metadata.csv")
+        if not asset_migration_df.empty:
+            asset_labels = {
+                f"{row['reference_id']} — {row['component_id']} — {row['component_name']}": int(row["component_id"])
+                for _, row in asset_migration_df.iterrows()
+            }
+            selected_asset_label = st.selectbox("Select asset to update migration metadata", list(asset_labels.keys()), key="admin_asset_migration_select")
+            selected_asset = svc.get_component(asset_labels[selected_asset_label])
+            if selected_asset:
+                with st.form("admin_update_asset_migration"):
+                    a1, a2, a3 = st.columns(3)
+                    asset_migration_status = a1.selectbox(
+                        "Asset migration status",
+                        MIGRATION_STATUSES,
+                        index=option_index(MIGRATION_STATUSES, selected_asset.get("asset_migration_status") or "Not assessed"),
+                    )
+                    asset_mapping_confidence = a2.selectbox(
+                        "Asset material mapping confidence",
+                        ["Not Assessed", "Low", "Medium", "High"],
+                        index=option_index(["Not Assessed", "Low", "Medium", "High"], selected_asset.get("material_mapping_confidence") or "Not Assessed"),
+                    )
+                    asset_legacy_sensitive = a3.selectbox(
+                        "Legacy sensitive-data flag",
+                        ["", "No", "Yes", "Unknown"],
+                        index=option_index(["", "No", "Yes", "Unknown"], selected_asset.get("legacy_sensitive_data_flag") or ""),
+                    )
+                    asset_legacy_criticality = a1.selectbox(
+                        "Legacy criticality",
+                        ["", "Low", "Medium", "High", "Very High", "Unknown"],
+                        index=option_index(["", "Low", "Medium", "High", "Very High", "Unknown"], selected_asset.get("legacy_criticality") or ""),
+                    )
+                    asset_legacy_sla = a2.selectbox(
+                        "Legacy support contract / SLA",
+                        ["", "No", "Yes", "Not Applicable", "Unknown"],
+                        index=option_index(["", "No", "Yes", "Not Applicable", "Unknown"], selected_asset.get("legacy_support_contract_sla") or ""),
+                    )
+                    asset_migration_notes = st.text_area("Asset migration notes", value=selected_asset.get("asset_migration_notes") or "")
+                    if st.form_submit_button("Save asset migration metadata"):
+                        asset_payload = dict(selected_asset)
+                        asset_payload.update({
+                            "asset_migration_status": asset_migration_status,
+                            "asset_migration_notes": asset_migration_notes,
+                            "material_mapping_confidence": asset_mapping_confidence,
+                            "legacy_sensitive_data_flag": asset_legacy_sensitive,
+                            "legacy_criticality": asset_legacy_criticality,
+                            "legacy_support_contract_sla": asset_legacy_sla,
+                        })
+                        svc.update_component(int(selected_asset["component_id"]), asset_payload, username)
+                        st.success("Asset migration metadata updated.")
                         rerun()
 
     with tabs[6]:

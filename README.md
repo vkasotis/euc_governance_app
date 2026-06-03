@@ -107,3 +107,12 @@ The Register New EUC page no longer asks EUC Owners for the former "Inventory co
 - GCC Monitoring View and Admin Configuration: portfolio-level inventory completeness/migration monitoring and migration metadata updates.
 
 Library of Controls remains an uploaded attachment/evidence type rather than a structured database module.
+
+## Asset form refinement
+
+- The EUC Asset Inventory form no longer asks EUC Owners to maintain migration and legacy-conversion metadata in the normal asset-entry flow.
+- The former mixed section `Ownership, criticality, migration and review` has been renamed to `Asset review and criticality`.
+- Asset migration status, migration notes and legacy conversion flags are maintained in Admin Configuration and visible in GCC Monitoring.
+- Vendor/COTS fields are conditional. If an asset is not a COTS/third-party component, vendor name, support status, SLA and end-of-support date are set to not applicable / blank.
+- Vendor support status is now a controlled list: Not Applicable, Supported / Active, Supported but end-of-support announced, Extended support, Unsupported / End of support, Unknown / To be confirmed.
+- Required input availability, expected run duration and fallback/recovery procedure reference are now controlled selections instead of free text.
