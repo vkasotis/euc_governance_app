@@ -101,6 +101,7 @@ ARTIFACT_UPLOAD_GUIDANCE = {
     "Testing Evidence": "Unit, functional, regression or challenger testing outputs, test cases, results, defects and sign-off. Mandatory for new go-live and triggered situations; not retrospectively recreated for legacy onboarding.",
     "UAT Evidence": "UAT plan, scenarios, data used, steps, results, issues, conclusions and formal user/head-of-unit sign-off. Mandatory for new go-live and triggered situations; not retrospectively recreated for legacy onboarding.",
     "Approval Evidence": "Approval email, workflow/ticket sign-off, Head of Unit approval, Senior Management approval or committee escalation evidence, depending on risk and trigger.",
+    "Documentation Gap Assessment": "For legacy onboarding or remediation review, record the current-state documentation/control gaps and indicate whether each gap is closed, remediated, accepted as risk, or covered by an exception. This can be satisfied by the in-app documentation gap workflow; no historical evidence recreation is expected.",
     "Access Review Evidence": "Evidence of named roles, ACL/RLS where applicable, privileged access control, leaver/role-change revocation or event-driven access review. No fixed annual/semi-annual/quarterly frequency is imposed by Appendix 4.",
     "Review Evidence": "Dated independent/four-eye, governance, management-attestation or review evidence identifying the EUC, review/run scope, checks performed, issues identified, reviewer conclusion and remediation actions where applicable.",
     "Reconciliation Evidence": "Reconciliations to authoritative sources or benchmarks, control totals, variance thresholds, explained deltas and reviewer sign-off.",
@@ -120,6 +121,8 @@ LEGACY_DOCUMENT_TYPE_ALIASES = {
     "Incident RCA Evidence": "Incident & RCA Evidence",
     "Containment / Correction Evidence": "Incident & RCA Evidence",
     "Independent / Periodic Review Evidence": "Review Evidence",
+    "Gap Assessment": "Documentation Gap Assessment",
+    "Documentation Gaps Assessment": "Documentation Gap Assessment",
     "Exception Closure Evidence": "Exception Record",
     "Evidence Pack Index": None,
 }
@@ -2277,7 +2280,22 @@ def _default_rule_metadata(doc_type: str) -> tuple[str, str]:
 
 
 def seed_required_rules(username: str = "system") -> None:
-    """Seed or top-up approved artifact rules based on the current policy baseline."""
+    """Seed or top-up approved artifact rules based on the current policy baseline.
+
+    Generic Review Evidence is intentionally not a blanket mandatory baseline.
+    It is now trigger-driven (e.g., High residual risk, independent review,
+    material change, incident or exception closure) rather than required for
+    every legacy or High/Very High inherent EUC. Remove older auto-seeded rules
+    that would otherwise keep incorrectly mandating it in existing databases.
+    """
+    execute(
+        """
+        DELETE FROM required_artifact_rules
+        WHERE required_document_type = 'Review Evidence'
+          AND risk_level IN ('Medium','High','Very High')
+          AND COALESCE(maker_checker_comments, '') LIKE 'Default policy baseline rule loaded%'
+        """
+    )
     for risk, docs in DEFAULT_REQUIRED_ARTIFACTS.items():
         for doc_type in docs:
             canonical = canonical_document_type(doc_type)
@@ -2434,9 +2452,12 @@ def _event_overlay_requirements(euc: dict[str, Any], baseline_risk: str) -> list
 
     if is_legacy and lifecycle in {"Draft", "Submitted", "Registered", "Awaiting Documentation", "Review Ready", "Active"}:
         overlays.extend([
-            ("Control Evidence", "Legacy Onboarding", "Legacy onboarding requires current-state control evidence where available; historical evidence is not retrospectively recreated.", True, "Legacy current-state", "Legacy onboarding"),
-            ("Reconciliation Evidence", "Legacy Onboarding", "Legacy onboarding requires current or recent reconciliation/control evidence where applicable.", True, "Legacy current-state", "Legacy onboarding"),
-            ("Review Evidence", "Legacy Onboarding", "Legacy onboarding may be supported by current review or management attestation.", True, "Legacy current-state", "Legacy onboarding"),
+            ("Documentation Gap Assessment", "Legacy Onboarding", "Legacy onboarding requires a current-state documentation/control gap assessment. Historical testing, UAT, approval or review evidence is not retrospectively recreated.", True, "Legacy current-state", "Legacy onboarding"),
+            ("Change & Versioning Evidence", "Legacy Onboarding", "Legacy onboarding requires current version/change information where available; full historical release notes are not retrospectively recreated.", True, "Legacy current-state", "Legacy onboarding"),
+            ("Control Evidence", "Legacy Onboarding", "Current-state control evidence is required where applicable to the EUC's controls and risk profile; unavailable historical evidence should be logged as a gap, remediation, exception or risk acceptance.", False, "Where applicable", "Legacy onboarding"),
+            ("Reconciliation Evidence", "Legacy Onboarding", "Current or recent reconciliation/control evidence is required where applicable to key outputs; it is not a blanket historical-evidence requirement for all legacy EUCs.", False, "Where applicable", "Legacy onboarding"),
+            ("Access Review Evidence", "Legacy Onboarding", "Current access evidence is required where named roles, ACL/RLS or privileged access controls apply; formal historical access reviews are not recreated solely for onboarding.", False, "Where applicable", "Legacy onboarding"),
+            ("Resilience Evidence", "Legacy Onboarding", "Current resilience/backup/fallback evidence is required where applicable based on risk, SPOF or time-criticality.", False, "Where applicable", "Legacy onboarding"),
         ])
 
     open_incidents = get_incidents(euc_id, open_only=True)
@@ -2544,6 +2565,27 @@ def required_documents_for_euc(euc_id: int) -> pd.DataFrame:
 
 
 
+
+def _documentation_gap_assessment_status(euc_id: int) -> tuple[str, int | None, str | None, str | None]:
+    """Return checklist status for the in-app Documentation Gap Assessment.
+
+    The policy requires legacy onboarding gaps to be assessed and tracked, but it
+    does not require a separate historical file upload. The in-app gap workflow
+    satisfies the assessment when a summary exists or gap rows have been logged.
+    Open gaps keep the item submitted/pending; closed or no-open-gap summaries are
+    accepted for checklist completeness.
+    """
+    euc = get_euc(euc_id) or {}
+    gaps = get_documentation_gaps(euc_id, open_only=False)
+    summary = str(euc.get("documentation_gaps_summary") or "").strip()
+    if gaps.empty and not summary:
+        return "Missing", None, None, "Complete the in-app documentation gap assessment summary or record gap rows; no historical evidence recreation is required."
+    if not gaps.empty and "status" in gaps.columns:
+        open_gaps = gaps[~gaps["status"].isin(["Closed", "Cancelled", "Accepted Risk"])]
+        if not open_gaps.empty:
+            return "Submitted", None, None, f"Documentation gap assessment logged with {len(open_gaps)} open gap(s) requiring remediation/exception/risk acceptance."
+    return "Accepted", None, None, "Documentation gap assessment recorded in the app."
+
 def artifact_checklist(euc_id: int) -> pd.DataFrame:
     required = required_documents_for_euc(euc_id)
     docs = get_documents(euc_id)
@@ -2551,7 +2593,10 @@ def artifact_checklist(euc_id: int) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for _, req in required.iterrows():
         doc_type = req["required_document_type"]
-        if doc_type == "Risk Assessment":
+        if doc_type == "Documentation Gap Assessment":
+            status, document_id, reviewed_by, comments = _documentation_gap_assessment_status(euc_id)
+            assessment_id = None
+        elif doc_type == "Risk Assessment":
             if assessments.empty:
                 status = "Missing"
                 document_id = None
@@ -4506,6 +4551,9 @@ def delete_all_euc_operational_data(username: str) -> dict[str, Any]:
         "material_changes",
         "documents",
         "risk_assessments",
+        "documentation_gaps",
+        "high_criticality_reviews",
+        "industrialization_assessments",
         "components",
         "eucs",
     ]

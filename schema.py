@@ -239,6 +239,7 @@ DOCUMENT_TYPES = [
     "Testing Evidence",
     "UAT Evidence",
     "Approval Evidence",
+    "Documentation Gap Assessment",
     "Review Evidence",
     "Reconciliation Evidence",
     "Resilience Evidence",
@@ -335,7 +336,6 @@ DEFAULT_REQUIRED_ARTIFACTS = {
         "Operating Procedure",
         "Change & Versioning Evidence",
         "Control Evidence",
-        "Review Evidence",
     ],
     "High": [
         "Risk Assessment",
@@ -343,7 +343,6 @@ DEFAULT_REQUIRED_ARTIFACTS = {
         "Library of Controls",
         "Change & Versioning Evidence",
         "Reconciliation Evidence",
-        "Review Evidence",
         "Access Review Evidence",
         "Resilience Evidence",
     ],
@@ -354,7 +353,6 @@ DEFAULT_REQUIRED_ARTIFACTS = {
         "Change & Versioning Evidence",
         "Reconciliation Evidence",
         "Resilience Evidence",
-        "Review Evidence",
         "Access Review Evidence",
     ],
 }

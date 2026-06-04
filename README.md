@@ -117,31 +117,25 @@ Library of Controls remains an uploaded attachment/evidence type rather than a s
 - Vendor support status is now a controlled list: Not Applicable, Supported / Active, Supported but end-of-support announced, Extended support, Unsupported / End of support, Unknown / To be confirmed.
 - Required input availability, expected run duration and fallback/recovery procedure reference are now controlled selections instead of free text.
 
-## Imported EUC Inventory records
+## Policy-triggered artifact checklist update and imported inventory records
 
-This package includes a pre-populated SQLite database created from the uploaded workbook `1.EUC_Inventory.xlsx`.
+This release updates the Required Artifact Checklist to avoid blanket-mandating evidence that the policy treats as conditional, where applicable, legacy-current-state, or event-driven.
 
-Imported counts:
+Key checklist changes:
+- Generic `Review Evidence` is no longer a default mandatory artifact for every Medium/High/Very High or legacy EUC. It is now trigger-driven, for example High residual risk, Data Validation/GCC review requirement, material change, incident, exception closure or other governance request.
+- Legacy onboarding now requires `Documentation Gap Assessment` instead of blanket historical review evidence.
+- Legacy onboarding requests `Change & Versioning Evidence` as current version/change information, but does not require full historical release notes to be recreated.
+- Legacy current-state `Control Evidence`, `Reconciliation Evidence`, `Access Review Evidence` and `Resilience Evidence` are shown as where-applicable items rather than blanket mandatory items unless the inherent-risk baseline or a specific event makes them mandatory.
+- Testing Evidence, UAT Evidence and Approval Evidence remain mandatory for new go-live and event-driven situations, but not retrospectively for legacy initial onboarding.
+- Library of Controls remains an uploaded evidence attachment and is mandatory only where the inherent-risk / BCBS materiality baseline requires it.
 
-- EUC Application records: 410
-  - 409 records from the workbook `EUC Application Inventory` sheet
-  - 1 placeholder record `EUC.IMPORT.UNMATCHED` for asset rows without a valid parent EUC reference
-- EUC Asset / Component records: 1,268
-- Asset records linked to the unmatched placeholder: 224
+The package includes an imported SQLite database built from `1.EUC_Inventory.xlsx`:
+- EUC Application records: 410, including one placeholder parent for unmatched asset rows.
+- EUC Asset / Component records: 1,268.
+- User directory records after import: 137.
+- Material BCBS 239 EUCs: 379.
+- Asset rows requiring parent mapping review: 224.
 
-The import preserves the parent-child model:
-
-- Parent layer: `eucs.reference_id`
-- Child layer: `components.euc_id`
-
-The import also creates user-directory entries for imported EUC owners/reviewers using the default demo email address, so those names can be selected in the simple MVP login.
-
-To recreate the records from the embedded inventory snapshot, run:
-
-```bash
-python seed_inventory_records.py --force
-```
-
-The `--force` option removes existing EUC operational data before loading the imported inventory records. It preserves users, configuration, RACI rules, reference data and audit trail according to the application purge rules.
-
-Note: the package intentionally includes `euc_governance.db` so the records are visible immediately after deployment. If you want a clean deployment, delete `euc_governance.db` before committing/deploying and rerun `python seed_inventory_records.py --force` only when you want to reload the imported inventory records.
+The package also includes:
+- `inventory_seed_data.json`, a JSON snapshot extracted from the Excel workbook.
+- `seed_inventory_records.py`, which can recreate the imported records using `python seed_inventory_records.py --force`.
