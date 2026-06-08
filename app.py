@@ -817,6 +817,43 @@ def option_index(options: list[str], value: str | None, default: int = 0) -> int
     return default
 
 
+def safe_date_input_value(value: Any, default: date | None = None) -> date:
+    """Return a safe Python date for Streamlit date_input widgets.
+
+    Imported inventory spreadsheets may contain narrative text such as
+    "Reassess at onboarding..." in date columns. Passing that directly to
+    pandas.to_datetime raises DateParseError and leaves Streamlit forms without
+    a rendered submit button. This helper treats non-date values as blank and
+    falls back to the supplied default.
+    """
+    fallback = default or date.today()
+    if value is None:
+        return fallback
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "nan", "nat", "n/a", "na", "not applicable", "not assessed", "unknown", "tbd", "-"}:
+        return fallback
+
+    # Excel serial date support for imported workbook values.
+    try:
+        numeric = float(text)
+        if 20000 <= numeric <= 60000:
+            parsed_serial = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
+            if pd.notna(parsed_serial):
+                return parsed_serial.date()
+    except Exception:
+        pass
+
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return fallback
+    return parsed.date()
+
+
 WORKING_DAY_OPTIONS = list(range(1, 91))
 
 def _working_day_index(value: Any, default: int = 0) -> int:
@@ -1653,8 +1690,8 @@ def page_detail() -> None:
             with st.expander("Edit post-registration governance fields"):
                 with st.form(f"edit_governance_fields_{euc['euc_id']}"):
                     g1, g2, g3 = st.columns(3)
-                    reg_date_val = pd.to_datetime(euc.get("registration_date") or date.today()).date()
-                    go_live_val = pd.to_datetime(euc.get("go_live_date") or date.today()).date()
+                    reg_date_val = safe_date_input_value(euc.get("registration_date"))
+                    go_live_val = safe_date_input_value(euc.get("go_live_date"))
                     registration_date_edit = g1.date_input("Registration date", value=reg_date_val, key=f"gov_reg_date_{euc['euc_id']}")
                     go_live_date_edit = g2.date_input("Go-live / BAU use date", value=go_live_val, key=f"gov_go_live_{euc['euc_id']}")
                     material_mapping_confidence = g3.selectbox(
@@ -1692,7 +1729,7 @@ def page_detail() -> None:
                     storage = st.text_input("Storage location", value=euc.get("storage_location") or "")
                     lifecycle = st.selectbox("Lifecycle status", LIFECYCLE_STATUSES, index=option_index(LIFECYCLE_STATUSES, euc.get("lifecycle_status")))
                     overall = st.selectbox("Overall status", OVERALL_STATUSES, index=option_index(OVERALL_STATUSES, euc.get("overall_status")))
-                    next_review = st.date_input("Next Risk Assessment / review date", value=pd.to_datetime(euc.get("next_review_date") or date.today()).date())
+                    next_review = st.date_input("Next Risk Assessment / review date", value=safe_date_input_value(euc.get("next_review_date"), date.today() + timedelta(days=365)))
                     u1, u2, u3 = st.columns(3)
                     multi_bu_use = u1.selectbox("In use by two or more distinct BUs?", ["No", "Yes"], index=option_index(["No", "Yes"], euc.get("multi_bu_use") or "No"), key=f"edit_multi_bu_{euc['euc_id']}")
                     active_user_count = u2.number_input("Number of Active Users", min_value=0, step=1, value=int(euc.get("active_user_count") or 0), key=f"edit_active_users_{euc['euc_id']}")
@@ -1954,8 +1991,7 @@ def _component_asset_form(prefix: str, euc: dict[str, Any], component: dict[str,
         fallback_bcp_steps_link = f"{fallback_recovery_reference}: {fallback_detail}" if fallback_detail else fallback_recovery_reference
     asset_deputy_cover = c13e.selectbox("Deputy cover", ["No", "Yes", "Not Applicable"], index=option_index(["No", "Yes", "Not Applicable"], component.get("asset_deputy_cover") or "No"), key=f"{prefix}_asset_deputy")
     key_person_dependency_mitigated = c13f.selectbox("Key-person dependency mitigated?", ["No", "Yes", "Not Applicable"], index=option_index(["No", "Yes", "Not Applicable"], component.get("key_person_dependency_mitigated") or "No"), key=f"{prefix}_key_person")
-    restore_default = pd.to_datetime(component.get("asset_last_restore_test_date"), errors="coerce")
-    asset_last_restore_test_date = st.date_input("Last restore test date", value=(restore_default.date() if pd.notna(restore_default) else date.today()), key=f"{prefix}_asset_restore")
+    asset_last_restore_test_date = st.date_input("Last restore test date", value=safe_date_input_value(component.get("asset_last_restore_test_date")), key=f"{prefix}_asset_restore")
 
     st.markdown("#### 7. Security, versioning and third-party support")
     c3p1, c3p2, c3p3 = st.columns(3)
@@ -1970,11 +2006,11 @@ def _component_asset_form(prefix: str, euc: dict[str, Any], component: dict[str,
             index=option_index(VENDOR_SUPPORT_STATUS_OPTIONS, component.get("vendor_support_status") or "Unknown / To be confirmed"),
             key=f"{prefix}_vendor_support",
         )
-        eos_default = pd.to_datetime(component.get("end_of_support_date"), errors="coerce")
-        eos_known_default = bool(vendor_tool_name.strip()) and pd.notna(eos_default)
+        eos_default = safe_date_input_value(component.get("end_of_support_date"), date.today() + timedelta(days=365))
+        eos_known_default = bool(vendor_tool_name.strip()) and bool(str(component.get("end_of_support_date") or "").strip())
         end_of_support_known = c3p5.checkbox("End-of-support date known", value=eos_known_default, key=f"{prefix}_eos_known")
         if end_of_support_known and vendor_tool_name.strip():
-            end_of_support_date_value = c3p5.date_input("End-of-support date", value=(eos_default.date() if pd.notna(eos_default) else date.today() + timedelta(days=365)), key=f"{prefix}_eos")
+            end_of_support_date_value = c3p5.date_input("End-of-support date", value=eos_default, key=f"{prefix}_eos")
             end_of_support_date = end_of_support_date_value.isoformat()
         else:
             end_of_support_date = ""
@@ -2001,10 +2037,8 @@ def _component_asset_form(prefix: str, euc: dict[str, Any], component: dict[str,
     c14, c15, c16, c17 = st.columns(4)
     owner_value = user_selectbox("Asset steward / technical contact", component.get("owner") or euc.get("owner"), key=f"{prefix}_owner")
     criticality = c15.selectbox("Asset criticality", ["Low", "Medium", "High", "Critical"], index=option_index(["Low", "Medium", "High", "Critical"], component.get("criticality") or component.get("legacy_criticality") or "Medium"), key=f"{prefix}_criticality")
-    mod_default = pd.to_datetime(component.get("modification_date"), errors="coerce")
-    review_default = pd.to_datetime(component.get("review_date"), errors="coerce")
-    modification_date = c16.date_input("Last modification date", value=(mod_default.date() if pd.notna(mod_default) else date.today()), key=f"{prefix}_mod_date")
-    review_date = c17.date_input("Next asset review date", value=(review_default.date() if pd.notna(review_default) else date.today() + timedelta(days=90)), key=f"{prefix}_review_date")
+    modification_date = c16.date_input("Last modification date", value=safe_date_input_value(component.get("modification_date")), key=f"{prefix}_mod_date")
+    review_date = c17.date_input("Next asset review date", value=safe_date_input_value(component.get("review_date"), date.today() + timedelta(days=90)), key=f"{prefix}_review_date")
     material_mapping_confidence = component.get("material_mapping_confidence") or "Not Assessed"
     asset_migration_status = component.get("asset_migration_status") or "Not assessed"
     legacy_sensitive_data_flag = component.get("legacy_sensitive_data_flag") or ""
@@ -2626,8 +2660,7 @@ def page_tasks() -> None:
         c1, c2, c3 = st.columns(3)
         status = c1.selectbox("Status", TASK_STATUSES, index=option_index(TASK_STATUSES, selected_task.get("status")))
         priority = c2.selectbox("Priority", PRIORITIES, index=option_index(PRIORITIES, selected_task.get("priority")))
-        due_default = pd.to_datetime(selected_task.get("due_date"), errors="coerce")
-        due_date = c3.date_input("Due date", value=(due_default.date() if pd.notna(due_default) else date.today()))
+        due_date = c3.date_input("Due date", value=safe_date_input_value(selected_task.get("due_date")))
         evidence_id = st.number_input(
             "Closure evidence document ID",
             min_value=0,
